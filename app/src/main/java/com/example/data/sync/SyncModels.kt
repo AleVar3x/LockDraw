@@ -98,15 +98,15 @@ object SyncActionSerializer {
                 json.put("type", "STROKE_POINTS")
                 json.put("strokeId", action.strokeId)
                 json.put("authorId", action.authorId)
-                val pointsArray = JSONArray()
-                action.points.forEach { p ->
-                    val pt = JSONObject()
-                    pt.put("x", p.x.toDouble())
-                    pt.put("y", p.y.toDouble())
-                    pt.put("pressure", p.pressure.toDouble())
-                    pointsArray.put(pt)
+                val sb = StringBuilder()
+                action.points.forEachIndexed { index, p ->
+                    if (index > 0) sb.append(';')
+                    val ix = (p.x * 1000).toInt()
+                    val iy = (p.y * 1000).toInt()
+                    val ip = (p.pressure * 100).toInt()
+                    sb.append(ix).append(',').append(iy).append(',').append(ip)
                 }
-                json.put("points", pointsArray)
+                json.put("pts", sb.toString())
             }
             is SyncAction.StrokeFinished -> {
                 json.put("type", "STROKE_FINISHED")
@@ -117,15 +117,15 @@ object SyncActionSerializer {
                 json.put("brushType", s.brushType.name)
                 json.put("alpha", s.alpha.toDouble())
                 json.put("authorId", s.authorId)
-                val pts = JSONArray()
-                s.points.forEach { p ->
-                    val pt = JSONObject()
-                    pt.put("x", p.x.toDouble())
-                    pt.put("y", p.y.toDouble())
-                    pt.put("pressure", p.pressure.toDouble())
-                    pts.put(pt)
+                val sb = StringBuilder()
+                s.points.forEachIndexed { index, p ->
+                    if (index > 0) sb.append(';')
+                    val ix = (p.x * 1000).toInt()
+                    val iy = (p.y * 1000).toInt()
+                    val ip = (p.pressure * 100).toInt()
+                    sb.append(ix).append(',').append(iy).append(',').append(ip)
                 }
-                json.put("points", pts)
+                json.put("pts", sb.toString())
             }
             is SyncAction.PlaceSticker -> {
                 json.put("type", "PLACE_STICKER")
@@ -197,15 +197,15 @@ object SyncActionSerializer {
                     sObj.put("brushType", s.brushType.name)
                     sObj.put("alpha", s.alpha.toDouble())
                     sObj.put("authorId", s.authorId)
-                    val pts = JSONArray()
-                    s.points.forEach { p ->
-                        val pt = JSONObject()
-                        pt.put("x", p.x.toDouble())
-                        pt.put("y", p.y.toDouble())
-                        pt.put("pressure", p.pressure.toDouble())
-                        pts.put(pt)
+                    val sb = StringBuilder()
+                    s.points.forEachIndexed { index, p ->
+                        if (index > 0) sb.append(';')
+                        val ix = (p.x * 1000).toInt()
+                        val iy = (p.y * 1000).toInt()
+                        val ip = (p.pressure * 100).toInt()
+                        sb.append(ix).append(',').append(iy).append(',').append(ip)
                     }
-                    sObj.put("points", pts)
+                    sObj.put("pts", sb.toString())
                     strokesArr.put(sObj)
                 }
                 json.put("strokes", strokesArr)
@@ -228,6 +228,38 @@ object SyncActionSerializer {
         return json.toString()
     }
 
+    private fun parsePoints(json: JSONObject): List<DrawingPoint> {
+        val pts = mutableListOf<DrawingPoint>()
+        if (json.has("pts")) {
+            val raw = json.optString("pts", "")
+            if (raw.isNotEmpty()) {
+                val tokens = raw.split(';')
+                for (token in tokens) {
+                    val parts = token.split(',')
+                    if (parts.size >= 2) {
+                        val x = (parts[0].toFloatOrNull() ?: 0f) / 1000f
+                        val y = (parts[1].toFloatOrNull() ?: 0f) / 1000f
+                        val p = if (parts.size >= 3) (parts[2].toFloatOrNull() ?: 100f) / 100f else 1.0f
+                        pts.add(DrawingPoint(x, y, p))
+                    }
+                }
+            }
+        } else if (json.has("points")) {
+            val ptsArr = json.optJSONArray("points") ?: JSONArray()
+            for (j in 0 until ptsArr.length()) {
+                val pObj = ptsArr.getJSONObject(j)
+                pts.add(
+                    DrawingPoint(
+                        x = pObj.getDouble("x").toFloat(),
+                        y = pObj.getDouble("y").toFloat(),
+                        pressure = pObj.optDouble("pressure", 1.0).toFloat()
+                    )
+                )
+            }
+        }
+        return pts
+    }
+
     fun fromJson(jsonString: String): SyncAction? {
         return try {
             val json = JSONObject(jsonString)
@@ -244,18 +276,7 @@ object SyncActionSerializer {
                     val strokesList = mutableListOf<DrawingStroke>()
                     for (i in 0 until strokesArr.length()) {
                         val sObj = strokesArr.getJSONObject(i)
-                        val ptsArr = sObj.optJSONArray("points") ?: JSONArray()
-                        val pts = mutableListOf<DrawingPoint>()
-                        for (j in 0 until ptsArr.length()) {
-                            val pObj = ptsArr.getJSONObject(j)
-                            pts.add(
-                                DrawingPoint(
-                                    x = pObj.getDouble("x").toFloat(),
-                                    y = pObj.getDouble("y").toFloat(),
-                                    pressure = pObj.optDouble("pressure", 1.0).toFloat()
-                                )
-                            )
-                        }
+                        val pts = parsePoints(sObj)
                         strokesList.add(
                             DrawingStroke(
                                 id = sObj.getString("strokeId"),
@@ -306,18 +327,7 @@ object SyncActionSerializer {
                     )
                 }
                 "STROKE_POINTS" -> {
-                    val ptsArr = json.getJSONArray("points")
-                    val pts = mutableListOf<DrawingPoint>()
-                    for (i in 0 until ptsArr.length()) {
-                        val obj = ptsArr.getJSONObject(i)
-                        pts.add(
-                            DrawingPoint(
-                                x = obj.getDouble("x").toFloat(),
-                                y = obj.getDouble("y").toFloat(),
-                                pressure = obj.optDouble("pressure", 1.0).toFloat()
-                            )
-                        )
-                    }
+                    val pts = parsePoints(json)
                     SyncAction.StrokePoints(
                         strokeId = json.getString("strokeId"),
                         points = pts,
@@ -325,18 +335,7 @@ object SyncActionSerializer {
                     )
                 }
                 "STROKE_FINISHED" -> {
-                    val ptsArr = json.getJSONArray("points")
-                    val pts = mutableListOf<DrawingPoint>()
-                    for (i in 0 until ptsArr.length()) {
-                        val obj = ptsArr.getJSONObject(i)
-                        pts.add(
-                            DrawingPoint(
-                                x = obj.getDouble("x").toFloat(),
-                                y = obj.getDouble("y").toFloat(),
-                                pressure = obj.optDouble("pressure", 1.0).toFloat()
-                            )
-                        )
-                    }
+                    val pts = parsePoints(json)
                     val stroke = DrawingStroke(
                         id = json.getString("strokeId"),
                         points = pts,

@@ -362,36 +362,72 @@ fun BrushPaletteBar(
     }
 
     if (showClearDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDialog = false },
-            title = {
-                Text(
-                    text = "Cancellare il disegno?",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-            },
-            text = {
-                Text(
-                    text = "Verranno rimossi tutti i tratti e gli sticker dallo schermo condiviso. Lo sfondo rimarrà intatto."
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onClearCanvas()
-                        showClearDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x99000000))
+                .clickable { showClearDialog = false },
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                color = Color(0xFF1E1D30),
+                shape = RoundedCornerShape(20.dp),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0x44FF5252)),
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .clickable(enabled = false) {}
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Cancella Tutto")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) {
-                    Text("Annulla")
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = null,
+                        tint = Color(0xFFFF5252),
+                        modifier = Modifier.size(36.dp)
+                    )
+
+                    Text(
+                        text = "Cancellare il disegno?",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = Color.White
+                    )
+
+                    Text(
+                        text = "Verranno rimossi tutti i tratti e gli sticker dallo schermo condiviso. Lo sfondo rimarrà intatto.",
+                        fontSize = 13.sp,
+                        color = Color(0xFFB0AEC7),
+                        lineHeight = 18.sp
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        TextButton(
+                            onClick = { showClearDialog = false },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Annulla", color = Color(0xFFB0AEC7))
+                        }
+
+                        Button(
+                            onClick = {
+                                onClearCanvas()
+                                showClearDialog = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1.3f)
+                        ) {
+                            Text("Cancella Tutto", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
-        )
+        }
     }
 }

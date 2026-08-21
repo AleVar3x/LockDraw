@@ -14,7 +14,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +36,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -42,19 +45,16 @@ import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,8 +63,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -80,7 +78,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -88,10 +89,11 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.BrushType
 import com.example.data.model.WallpaperTheme
 import com.example.data.sync.ConnectionStatus
+import com.example.ui.components.DrawingCanvas
 import com.example.util.QrCodeView
-import com.example.util.WallpaperTarget
 import com.example.viewmodel.DrawingViewModel
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -102,6 +104,8 @@ fun MainDrawingScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
 
     val roomCode by viewModel.roomCode.collectAsState()
@@ -109,16 +113,39 @@ fun MainDrawingScreen(
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val partnerPresence by viewModel.partnerPresence.collectAsState()
     val strokes by viewModel.strokes.collectAsState()
+    val currentDraftStroke by viewModel.currentDraftStroke.collectAsState()
+    val partnerDraftStroke by viewModel.partnerDraftStroke.collectAsState()
     val placedStickers by viewModel.placedStickers.collectAsState()
+    val selectedStickerId by viewModel.selectedStickerId.collectAsState()
+    val floatingReactions by viewModel.floatingReactions.collectAsState()
     val isFloatingActive by viewModel.isFloatingServiceActive.collectAsState()
-    val autoUpdateWallpaper by viewModel.autoUpdateRealWallpaper.collectAsState()
     val lockscreenConfig by viewModel.lockscreenConfig.collectAsState()
+
+    val selectedBrushType by viewModel.selectedBrushType.collectAsState()
+    val selectedColor by viewModel.selectedColor.collectAsState()
+    val strokeWidth by viewModel.strokeWidth.collectAsState()
 
     var partnerCodeInput by remember { mutableStateOf("") }
     var showQrDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
     var hasOverlayPermission by remember { mutableStateOf(viewModel.canDrawOverlays(context)) }
-    var isApplyingWallpaper by remember { mutableStateOf(false) }
+
+    val drawingColors = remember {
+        listOf(
+            Color(0xFFFF2A6D), // Neon Pink
+            Color(0xFF05D9E8), // Neon Cyan
+            Color(0xFFFFD700), // Yellow Gold
+            Color(0xFF00FF66), // Neon Green
+            Color(0xFFB15EFF), // Neon Purple
+            Color(0xFFFF8C00), // Orange
+            Color(0xFFFFFFFF), // White
+            Color(0xFF1F1F1F)  // Dark
+        )
+    }
+
+    val quickStickers = remember {
+        listOf("💖", "💌", "✨", "🧸", "💋", "🐱", "🌹", "🔥", "🎀", "⭐")
+    }
 
     // Launcher for overlay permission settings
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
@@ -773,6 +800,8 @@ fun MainDrawingScreen(
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
                                     if (partnerCodeInput.isNotBlank()) {
                                         viewModel.connectToRoomCode(partnerCodeInput)
                                         partnerCodeInput = ""
@@ -797,6 +826,8 @@ fun MainDrawingScreen(
                         // Connect CTA Button
                         Button(
                             onClick = {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
                                 if (partnerCodeInput.isNotBlank()) {
                                     val connectedTo = partnerCodeInput
                                     viewModel.connectToRoomCode(partnerCodeInput)
@@ -828,262 +859,14 @@ fun MainDrawingScreen(
                 }
             }
 
-            // 4. CARD: Stato Lavagna Condivisa & Sincronizzazione in Tempo Reale
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xD9181729)),
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.2.dp, Color(0x38FFFFFF)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Lavagna Condivisa in Tempo Reale",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-
-                        // Status Chip
-                        Surface(
-                            color = if (partnerPresence.isOnline) Color(0xFF2E7D32).copy(alpha = 0.3f) else Color(0xFFF57C00).copy(alpha = 0.2f),
-                            shape = CircleShape,
-                            border = BorderStroke(
-                                1.dp,
-                                if (partnerPresence.isOnline) Color(0xFF4ADE80) else Color(0xFFFFB74D)
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .background(
-                                            if (partnerPresence.isOnline) Color(0xFF4ADE80) else Color(0xFFFFB74D),
-                                            CircleShape
-                                        )
-                                )
-                                Text(
-                                    text = if (partnerPresence.isOnline) "🟢 Partner Online" else "🟠 In Attesa...",
-                                    color = if (partnerPresence.isOnline) Color(0xFF4ADE80) else Color(0xFFFFB74D),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    // Canvas stats pill
-                    Surface(
-                        color = Color(0xFF100F1C),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceAround,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "${strokes.size}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                Text(text = "Tratti", color = Color(0xFF8E8CA7), fontSize = 11.sp)
-                            }
-                            Box(modifier = Modifier.width(1.dp).height(24.dp).background(Color(0x33FFFFFF)))
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "${placedStickers.size}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                Text(text = "Sticker", color = Color(0xFF8E8CA7), fontSize = 11.sp)
-                            }
-                            Box(modifier = Modifier.width(1.dp).height(24.dp).background(Color(0x33FFFFFF)))
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = roomCode, color = Color(0xFFD0BCFF), fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                Text(text = "Stanza", color = Color(0xFF8E8CA7), fontSize = 11.sp)
-                            }
-                        }
-                    }
-
-                    // Test Real-Time actions (heart, partner simulated stroke, sticker)
-                    Text(
-                        text = "Testa la sincronizzazione in tempo reale:",
-                        color = Color(0xFF8E8CA7),
-                        fontSize = 12.sp
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Send Heart Ping
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.sendHeartReaction("💖", 0.5f, 0.5f)
-                                Toast.makeText(context, "Cuore inviato al partner!", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Color(0x44FF4081)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF80AB)),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("💖 Invia Cuore", fontSize = 11.sp)
-                        }
-
-                        // Simulated Partner Stroke
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.triggerPartnerSimulatedDraw("heart")
-                                Toast.makeText(context, "Disegno partner avviato in tempo reale!", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Color(0x44D0BCFF)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD0BCFF)),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("✨ Tratto Partner", fontSize = 11.sp)
-                        }
-                    }
-
-                    // Clear Canvas button
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.clearAllCanvas()
-                            Toast.makeText(context, "Lavagna condivisa cancellata", Toast.LENGTH_SHORT).show()
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Color(0x33FF5252)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF8A80)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Cancella Lavagna Condivisa per Entrambi", fontSize = 12.sp)
-                    }
-                }
-            }
-
-            // 5. CARD: Impostazioni Sfondo & Lockscreen Reale del Telefono
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xD9181729)),
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.2.dp, Color(0x38FFFFFF)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            color = Color(0xFF2A3942),
-                            shape = CircleShape,
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Wallpaper,
-                                    contentDescription = null,
-                                    tint = Color(0xFF80CBC4),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "Sfondo Lockscreen Reale",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
-                            )
-                            Text(
-                                text = "Imposta i disegni come sfondo del tuo telefono",
-                                color = Color(0xFF9E9DB5),
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    // Auto update switch
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Aggiorna Sfondo Lockscreen Reale",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = "Applica automaticamente i nuovi disegni del partner",
-                                color = Color(0xFF7E7C98),
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = autoUpdateWallpaper,
-                            onCheckedChange = { viewModel.setAutoUpdateRealWallpaper(it) },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = Color(0xFF6750A4)
-                            )
-                        )
-                    }
-
-                    // Manual Apply to Real Lockscreen Button
-                    Button(
-                        onClick = {
-                            isApplyingWallpaper = true
-                            viewModel.applyToRealLockscreen(context, WallpaperTarget.LOCKSCREEN) { success ->
-                                isApplyingWallpaper = false
-                                if (success) {
-                                    Toast.makeText(context, "Sfondo applicato al Lockscreen con successo!", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Impossibile impostare lo sfondo", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF1E293B),
-                            contentColor = Color(0xFFE2E8F0)
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isApplyingWallpaper
-                    ) {
-                        if (isApplyingWallpaper) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Applicazione in corso...", fontSize = 13.sp)
-                        } else {
-                            Icon(imageVector = Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Imposta Subito sul Lockscreen Reale", fontSize = 13.sp)
-                        }
-                    }
-                }
-            }
-
-            // 6. Big Prominent Action: Disegna su Schermo Subito (Bolla Fluttuante)
+            // Big Prominent Action: Disegna su Schermo Subito (Bolla Fluttuante)
             Button(
                 onClick = {
                     if (hasOverlayPermission) {
                         if (!isFloatingActive) {
                             viewModel.startFloatingService(context)
                         }
-                        Toast.makeText(context, "Tocca la bolla fluttuante per iniziare a disegnare!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "Tocca la bolla fluttuante per iniziare a disegnare su qualsiasi schermata!", Toast.LENGTH_LONG).show()
                     } else {
                         val intent = Intent(
                             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,

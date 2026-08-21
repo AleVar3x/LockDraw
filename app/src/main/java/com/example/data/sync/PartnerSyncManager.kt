@@ -7,6 +7,13 @@ import com.example.data.model.DrawingPoint
 import com.example.data.model.DrawingStroke
 import com.example.data.model.PlacedSticker
 import com.example.data.model.WallpaperTheme
+import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,18 +27,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 enum class ConnectionStatus {
@@ -82,30 +81,31 @@ class PartnerSyncManager(
     )
     val incomingActions: SharedFlow<SyncAction> = _incomingActions.asSharedFlow()
 
-    // Deduplication of received action IDs (to avoid replaying self actions or duplicates)
+    // Deduplication of received action IDs
     private val processedActionIds = ConcurrentHashMap.newKeySet<String>()
 
-    private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS) // Keep WebSocket open indefinitely
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .pingInterval(15, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
-
-    private var webSocket: WebSocket? = null
-    private var simulationJob: Job? = null
+    private var firestoreListener: ListenerRegistration? = null
     private var heartbeatJob: Job? = null
-    private var reconnectJob: Job? = null
+    private var simulationJob: Job? = null
+    private var draftThrottleJob: Job? = null
+    private var pendingDraftAction: SyncAction? = null
+
+    private val firestore by lazy {
+        try {
+            FirebaseFirestore.getInstance()
+        } catch (e: Exception) {
+            Log.e("PartnerSync", "Error getting Firestore instance", e)
+            null
+        }
+    }
 
     init {
-        // Automatically connect to saved room code on launch
         val savedCode = _currentRoomCode.value
         connectToRoom(savedCode, markAsMatched = _isMatched.value)
     }
 
     /**
-     * Connect and pair with a room.
+     * Connect and pair with a room in Firebase Firestore.
      */
     fun connectToRoom(code: String, markAsMatched: Boolean = true) {
         val cleanCode = code.trim().uppercase().ifBlank { "LOVE-779" }
@@ -117,170 +117,228 @@ class PartnerSyncManager(
             .putBoolean("is_matched", markAsMatched)
             .apply()
 
-        disconnectWebSocket()
+        disconnectFirestore()
         _connectionStatus.value = ConnectionStatus.CONNECTING
 
-        scope.launch(Dispatchers.IO) {
-            // First fetch missed messages/snapshot via HTTP history
-            fetchHistoryAndCatchUp(cleanCode)
-            // Connect live WebSocket stream
-            startWebSocketConnection(cleanCode)
-            startHeartbeat()
-        }
+        startFirestoreListener(cleanCode)
+        startHeartbeat()
     }
 
     /**
-     * Disconnect and unmatch explicitly (only when user taps "Scollega Partner").
+     * Disconnect and unmatch explicitly.
      */
     fun unmatchAndDisconnect() {
         _isMatched.value = false
         prefs.edit().putBoolean("is_matched", false).apply()
-        disconnectWebSocket()
+        disconnectFirestore()
         _partnerPresence.value = PartnerPresence(isOnline = false)
         _connectionStatus.value = ConnectionStatus.OFFLINE
     }
 
-    /**
-     * Fetch recent messages from ntfy topic JSON stream (catch-up if app was closed).
-     */
-    private fun fetchHistoryAndCatchUp(roomCode: String) {
-        val topic = getTopicForRoom(roomCode)
-        // ntfy.sh JSON stream endpoint with poll=1 & since=12h retrieves missed events
-        val pollUrl = "https://ntfy.sh/$topic/json?poll=1&since=12h"
-        try {
-            val request = Request.Builder().url(pollUrl).get().build()
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val bodyString = response.body?.string() ?: ""
-                    bodyString.lineSequence().forEach { line ->
-                        if (line.isNotBlank()) {
-                            try {
-                                val ntfyMsg = JSONObject(line)
-                                if (ntfyMsg.optString("event") == "message") {
-                                    val innerMessage = ntfyMsg.optString("message")
-                                    val msgId = ntfyMsg.optString("id")
-                                    if (innerMessage.isNotBlank() && (msgId.isBlank() || processedActionIds.add(msgId))) {
-                                        val action = SyncActionSerializer.fromJson(innerMessage)
-                                        if (action != null && !isActionFromSelf(action)) {
-                                            handleIncomingAction(action)
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                // Skip individual corrupt lines
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w("PartnerSync", "Catch-up poll error (non-fatal): ${e.message}")
+    private fun startFirestoreListener(roomCode: String) {
+        val db = firestore
+        if (db == null) {
+            Log.w("PartnerSync", "Firestore instance not available")
+            _connectionStatus.value = ConnectionStatus.OFFLINE
+            return
         }
-    }
-
-    private fun getTopicForRoom(roomCode: String): String {
-        return "lockdraw_sync_${roomCode.lowercase().replace("[^a-z0-9]".toRegex(), "")}"
-    }
-
-    private fun startWebSocketConnection(roomCode: String) {
-        disconnectWebSocket()
-        val topic = getTopicForRoom(roomCode)
-        // Connect to ntfy WebSocket with since=all to ensure no events are dropped while connecting
-        val wsUrl = "wss://ntfy.sh/$topic/ws"
-        Log.d("PartnerSync", "Connecting to live topic: $wsUrl (Device: $myDeviceId)")
 
         try {
-            val request = Request.Builder().url(wsUrl).build()
-            webSocket = client.newWebSocket(request, object : WebSocketListener() {
-                override fun onOpen(ws: WebSocket, response: Response) {
-                    _connectionStatus.value = ConnectionStatus.CONNECTED
-                    _partnerPresence.value = _partnerPresence.value.copy(isOnline = true)
-                    Log.d("PartnerSync", "Live WebSocket connected on topic: $topic")
-
-                    // Announce presence & ask for initial board snapshot from partner
-                    broadcastAction(SyncAction.RequestSnapshot(requesterId = myDeviceId))
-                }
-
-                override fun onMessage(ws: WebSocket, text: String) {
-                    try {
-                        val ntfyMsg = JSONObject(text)
-                        val event = ntfyMsg.optString("event")
-                        if (event == "message") {
-                            val innerMessage = ntfyMsg.optString("message")
-                            val msgId = ntfyMsg.optString("id")
-                            if (innerMessage.isNotBlank()) {
-                                if (msgId.isNotBlank() && !processedActionIds.add(msgId)) {
-                                    return // Already processed
-                                }
-                                val action = SyncActionSerializer.fromJson(innerMessage)
-                                if (action != null && !isActionFromSelf(action)) {
-                                    scope.launch(Dispatchers.Main.immediate) {
-                                        handleIncomingAction(action)
-                                    }
-                                }
-                            }
-                        } else if (event == "keepalive") {
-                            _partnerPresence.value = _partnerPresence.value.copy(isOnline = true)
-                        }
-                    } catch (e: Exception) {
-                        Log.e("PartnerSync", "Parse error for WS msg: $text", e)
-                    }
-                }
-
-                override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                    Log.d("PartnerSync", "WebSocket closed: $reason")
-                    _connectionStatus.value = ConnectionStatus.OFFLINE
-                }
-
-                override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                    Log.w("PartnerSync", "WebSocket failure, will reconnect: ${t.message}")
+            val docRef = db.collection("rooms").document(roomCode)
+            firestoreListener = docRef.addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("PartnerSync", "Firestore snapshot error: ${error.message}")
                     _connectionStatus.value = ConnectionStatus.CONNECTING
-                    scheduleReconnect(roomCode)
+                    return@addSnapshotListener
                 }
-            })
+
+                if (snapshot != null && snapshot.exists()) {
+                    _connectionStatus.value = ConnectionStatus.CONNECTED
+                    handleDocumentSnapshot(snapshot)
+                } else if (snapshot != null && !snapshot.exists()) {
+                    // Initialize empty room doc
+                    _connectionStatus.value = ConnectionStatus.CONNECTED
+                    initEmptyRoom(docRef)
+                }
+            }
         } catch (e: Exception) {
-            Log.e("PartnerSync", "Failed to initialize WebSocket", e)
-            scheduleReconnect(roomCode)
+            Log.e("PartnerSync", "Failed to attach Firestore snapshot listener", e)
+            _connectionStatus.value = ConnectionStatus.OFFLINE
         }
     }
 
-    private fun isActionFromSelf(action: SyncAction): Boolean {
-        return when (action) {
-            is SyncAction.StrokeBegin -> action.authorId == myDeviceId
-            is SyncAction.StrokePoints -> action.authorId == myDeviceId
-            is SyncAction.StrokeFinished -> action.stroke.authorId == myDeviceId
-            is SyncAction.PlaceSticker -> action.sticker.authorId == myDeviceId
-            is SyncAction.UpdateSticker -> action.sticker.authorId == myDeviceId
-            is SyncAction.RemoveSticker -> action.authorId == myDeviceId
-            is SyncAction.Undo -> action.authorId == myDeviceId
-            is SyncAction.HeartPing -> action.sender == myDeviceId
-            is SyncAction.CursorMove -> action.sender == myDeviceId
-            is SyncAction.RequestSnapshot -> action.requesterId == myDeviceId
-            is SyncAction.FullSnapshot -> action.authorId == myDeviceId
-            is SyncAction.ClearAll, is SyncAction.ChangeWallpaper -> false
+    private fun initEmptyRoom(docRef: DocumentReference) {
+        val data = hashMapOf<String, Any>(
+            "createdAt" to System.currentTimeMillis(),
+            "updatedAt" to System.currentTimeMillis(),
+            "strokes_json" to "[]",
+            "stickers_json" to "[]",
+            "wallpaperTheme" to "FROSTED_GLASS",
+            "presence" to mapOf(myDeviceId to System.currentTimeMillis())
+        )
+        docRef.set(data, SetOptions.merge())
+    }
+
+    private fun handleDocumentSnapshot(snapshot: DocumentSnapshot) {
+        try {
+            // 1. Check partner presence
+            val presenceMap = snapshot.get("presence") as? Map<*, *>
+            var partnerOnline = false
+            var latestPartnerActive = 0L
+            if (presenceMap != null) {
+                val now = System.currentTimeMillis()
+                for ((devId, timeVal) in presenceMap) {
+                    val idStr = devId?.toString() ?: ""
+                    val timeLong = (timeVal as? Number)?.toLong() ?: 0L
+                    if (idStr != myDeviceId && idStr.isNotBlank()) {
+                        if (now - timeLong < 35_000) {
+                            partnerOnline = true
+                            if (timeLong > latestPartnerActive) {
+                                latestPartnerActive = timeLong
+                            }
+                        }
+                    }
+                }
+            }
+
+            _partnerPresence.value = _partnerPresence.value.copy(
+                isOnline = partnerOnline,
+                lastActiveMillis = if (latestPartnerActive > 0) latestPartnerActive else _partnerPresence.value.lastActiveMillis
+            )
+
+            // 2. Check draft stroke
+            val draftSender = snapshot.getString("draft_sender")
+            val draftJson = snapshot.getString("draft_json")
+            if (!draftJson.isNullOrBlank() && draftSender != myDeviceId) {
+                val action = SyncActionSerializer.fromJson(draftJson)
+                if (action != null) {
+                    handleIncomingAction(action)
+                }
+            } else if (draftJson.isNullOrBlank() && _partnerPresence.value.isDrawing && draftSender != myDeviceId) {
+                _partnerPresence.value = _partnerPresence.value.copy(isDrawing = false)
+            }
+
+            // 3. Check discrete lastAction
+            val actionId = snapshot.getString("last_action_id")
+            val actionSender = snapshot.getString("last_action_sender")
+            val actionJson = snapshot.getString("last_action_json")
+
+            if (!actionId.isNullOrBlank() && actionSender != myDeviceId && processedActionIds.add(actionId)) {
+                if (!actionJson.isNullOrBlank()) {
+                    val action = SyncActionSerializer.fromJson(actionJson)
+                    if (action != null) {
+                        handleIncomingAction(action)
+                    }
+                }
+            }
+
+            // 4. Handle Full Snapshot update (for full synchronization)
+            val strokesJson = snapshot.getString("strokes_json")
+            val stickersJson = snapshot.getString("stickers_json")
+            val lastUpdateBy = snapshot.getString("updated_by")
+
+            if (lastUpdateBy != myDeviceId && (!strokesJson.isNullOrBlank() || !stickersJson.isNullOrBlank())) {
+                val themeName = snapshot.getString("wallpaperTheme") ?: "FROSTED_GLASS"
+                val theme = try { WallpaperTheme.valueOf(themeName) } catch (e: Exception) { WallpaperTheme.FROSTED_GLASS }
+
+                val strokesList = if (!strokesJson.isNullOrBlank()) parseStrokesFromJson(strokesJson) else emptyList()
+                val stickersList = if (!stickersJson.isNullOrBlank()) parseStickersFromJson(stickersJson) else emptyList()
+
+                val fullSnapshot = SyncAction.FullSnapshot(
+                    strokes = strokesList,
+                    stickers = stickersList,
+                    wallpaperTheme = theme,
+                    authorId = lastUpdateBy ?: "partner"
+                )
+                handleIncomingAction(fullSnapshot)
+            }
+        } catch (e: Exception) {
+            Log.e("PartnerSync", "Error handling Firestore snapshot", e)
         }
     }
 
-    private fun scheduleReconnect(roomCode: String) {
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch(Dispatchers.IO) {
-            delay(2500)
-            if (isActive && _connectionStatus.value != ConnectionStatus.CONNECTED) {
-                startWebSocketConnection(roomCode)
+    private fun parseStrokesFromJson(jsonString: String): List<DrawingStroke> {
+        val strokes = mutableListOf<DrawingStroke>()
+        try {
+            val arr = JSONArray(jsonString)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val pts = parsePoints(obj)
+                strokes.add(
+                    DrawingStroke(
+                        id = obj.getString("strokeId"),
+                        points = pts,
+                        colorArgb = obj.getInt("colorArgb"),
+                        strokeWidth = obj.getDouble("strokeWidth").toFloat(),
+                        brushType = try { BrushType.valueOf(obj.optString("brushType", "PEN")) } catch (e: Exception) { BrushType.PEN },
+                        authorId = obj.optString("authorId", "partner"),
+                        alpha = obj.optDouble("alpha", 1.0).toFloat()
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("PartnerSync", "Error parsing strokes JSON", e)
+        }
+        return strokes
+    }
+
+    private fun parseStickersFromJson(jsonString: String): List<PlacedSticker> {
+        val stickers = mutableListOf<PlacedSticker>()
+        try {
+            val arr = JSONArray(jsonString)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                stickers.add(
+                    PlacedSticker(
+                        id = obj.getString("id"),
+                        content = obj.getString("content"),
+                        x = obj.getDouble("x").toFloat(),
+                        y = obj.getDouble("y").toFloat(),
+                        scale = obj.optDouble("scale", 1.0).toFloat(),
+                        rotation = obj.optDouble("rotation", 0.0).toFloat(),
+                        authorId = obj.optString("authorId", "partner")
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("PartnerSync", "Error parsing stickers JSON", e)
+        }
+        return stickers
+    }
+
+    private fun parsePoints(json: JSONObject): List<DrawingPoint> {
+        val pts = mutableListOf<DrawingPoint>()
+        if (json.has("pts")) {
+            val raw = json.optString("pts", "")
+            if (raw.isNotEmpty()) {
+                val tokens = raw.split(';')
+                for (token in tokens) {
+                    val parts = token.split(',')
+                    if (parts.size >= 2) {
+                        val x = (parts[0].toFloatOrNull() ?: 0f) / 1000f
+                        val y = (parts[1].toFloatOrNull() ?: 0f) / 1000f
+                        val p = if (parts.size >= 3) (parts[2].toFloatOrNull() ?: 100f) / 100f else 1.0f
+                        pts.add(DrawingPoint(x, y, p))
+                    }
+                }
             }
         }
+        return pts
     }
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
-        heartbeatJob = scope.launch(Dispatchers.Default) {
+        heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
-                delay(15000)
-                if (_connectionStatus.value == ConnectionStatus.CONNECTED) {
-                    _partnerPresence.value = _partnerPresence.value.copy(
-                        isOnline = true,
-                        lastActiveMillis = System.currentTimeMillis()
+                delay(12000)
+                try {
+                    val db = firestore ?: return@launch
+                    val roomCode = _currentRoomCode.value
+                    db.collection("rooms").document(roomCode).update(
+                        "presence.$myDeviceId", System.currentTimeMillis()
                     )
+                } catch (e: Exception) {
+                    // Ignore non-fatal heartbeat errors
                 }
             }
         }
@@ -332,29 +390,146 @@ class PartnerSyncManager(
         _incomingActions.tryEmit(action)
     }
 
+    /**
+     * Broadcast an action to Firestore.
+     */
     fun broadcastAction(action: SyncAction) {
-        val topic = getTopicForRoom(_currentRoomCode.value)
-        val postUrl = "https://ntfy.sh/$topic"
+        val db = firestore ?: return
+        val roomCode = _currentRoomCode.value
+        val actionId = UUID.randomUUID().toString()
+        processedActionIds.add(actionId)
 
-        scope.launch(Dispatchers.IO) {
-            try {
-                val json = SyncActionSerializer.toJson(action)
-                val body = json.toRequestBody("text/plain; charset=utf-8".toMediaType())
-                val request = Request.Builder()
-                    .url(postUrl)
-                    .post(body)
-                    // High priority for instant push
-                    .header("Priority", "high")
-                    .header("Title", "LockDraw")
-                    .build()
-
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        Log.w("PartnerSync", "HTTP broadcast response code: ${response.code}")
+        when (action) {
+            is SyncAction.StrokeBegin, is SyncAction.StrokePoints -> {
+                // Throttle live drafting points to keep database writes clean and efficient
+                pendingDraftAction = action
+                if (draftThrottleJob?.isActive != true) {
+                    draftThrottleJob = scope.launch(Dispatchers.IO) {
+                        delay(120)
+                        val toSend = pendingDraftAction
+                        pendingDraftAction = null
+                        if (toSend != null) {
+                            val json = SyncActionSerializer.toJson(toSend)
+                            db.collection("rooms").document(roomCode).update(
+                                mapOf(
+                                    "draft_json" to json,
+                                    "draft_sender" to myDeviceId
+                                )
+                            )
+                        }
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("PartnerSync", "Failed to broadcast action", e)
+            }
+            is SyncAction.StrokeFinished -> {
+                draftThrottleJob?.cancel()
+                pendingDraftAction = null
+                val actionJson = SyncActionSerializer.toJson(action)
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        db.collection("rooms").document(roomCode).update(
+                            mapOf(
+                                "draft_json" to FieldValue.delete(),
+                                "draft_sender" to FieldValue.delete(),
+                                "last_action_id" to actionId,
+                                "last_action_sender" to myDeviceId,
+                                "last_action_json" to actionJson,
+                                "updated_by" to myDeviceId,
+                                "updatedAt" to System.currentTimeMillis()
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.e("PartnerSync", "Error updating finished stroke on Firestore", e)
+                    }
+                }
+            }
+            is SyncAction.FullSnapshot -> {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val strokesArr = JSONArray()
+                        action.strokes.forEach { s ->
+                            val sObj = JSONObject()
+                            sObj.put("strokeId", s.id)
+                            sObj.put("colorArgb", s.colorArgb)
+                            sObj.put("strokeWidth", s.strokeWidth.toDouble())
+                            sObj.put("brushType", s.brushType.name)
+                            sObj.put("alpha", s.alpha.toDouble())
+                            sObj.put("authorId", s.authorId)
+                            val sb = StringBuilder()
+                            s.points.forEachIndexed { idx, p ->
+                                if (idx > 0) sb.append(';')
+                                val ix = (p.x * 1000).toInt()
+                                val iy = (p.y * 1000).toInt()
+                                val ip = (p.pressure * 100).toInt()
+                                sb.append(ix).append(',').append(iy).append(',').append(ip)
+                            }
+                            sObj.put("pts", sb.toString())
+                            strokesArr.put(sObj)
+                        }
+
+                        val stArr = JSONArray()
+                        action.stickers.forEach { st ->
+                            val stObj = JSONObject()
+                            stObj.put("id", st.id)
+                            stObj.put("content", st.content)
+                            stObj.put("x", st.x.toDouble())
+                            stObj.put("y", st.y.toDouble())
+                            stObj.put("scale", st.scale.toDouble())
+                            stObj.put("rotation", st.rotation.toDouble())
+                            stObj.put("authorId", st.authorId)
+                            stArr.put(stObj)
+                        }
+
+                        val updates = hashMapOf<String, Any>(
+                            "strokes_json" to strokesArr.toString(),
+                            "stickers_json" to stArr.toString(),
+                            "wallpaperTheme" to action.wallpaperTheme.name,
+                            "updated_by" to myDeviceId,
+                            "updatedAt" to System.currentTimeMillis(),
+                            "draft_json" to FieldValue.delete()
+                        )
+                        db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
+                    } catch (e: Exception) {
+                        Log.e("PartnerSync", "Error setting full snapshot on Firestore", e)
+                    }
+                }
+            }
+            is SyncAction.ClearAll -> {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val updates = hashMapOf<String, Any>(
+                            "strokes_json" to "[]",
+                            "stickers_json" to "[]",
+                            "last_action_id" to actionId,
+                            "last_action_sender" to myDeviceId,
+                            "last_action_json" to SyncActionSerializer.toJson(action),
+                            "updated_by" to myDeviceId,
+                            "updatedAt" to System.currentTimeMillis(),
+                            "draft_json" to FieldValue.delete()
+                        )
+                        db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
+                    } catch (e: Exception) {
+                        Log.e("PartnerSync", "Error clearing canvas on Firestore", e)
+                    }
+                }
+            }
+            else -> {
+                // HeartPing, Sticker updates, Cursor, etc.
+                val actionJson = SyncActionSerializer.toJson(action)
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        db.collection("rooms").document(roomCode).update(
+                            mapOf(
+                                "last_action_id" to actionId,
+                                "last_action_sender" to myDeviceId,
+                                "last_action_json" to actionJson,
+                                "updated_by" to myDeviceId,
+                                "updatedAt" to System.currentTimeMillis()
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.e("PartnerSync", "Error broadcasting action to Firestore", e)
+                    }
+                }
             }
         }
     }
@@ -486,10 +661,10 @@ class PartnerSyncManager(
         }
     }
 
-    private fun disconnectWebSocket() {
+    private fun disconnectFirestore() {
         try {
-            webSocket?.close(1000, "Room change")
-            webSocket = null
+            firestoreListener?.remove()
+            firestoreListener = null
         } catch (e: Exception) {
             // ignore
         }
@@ -498,7 +673,7 @@ class PartnerSyncManager(
     fun cleanup() {
         simulationJob?.cancel()
         heartbeatJob?.cancel()
-        reconnectJob?.cancel()
-        disconnectWebSocket()
+        draftThrottleJob?.cancel()
+        disconnectFirestore()
     }
 }
