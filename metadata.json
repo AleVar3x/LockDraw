@@ -1,0 +1,7 @@
+{
+  "name": "LockDraw - Partner Lockscreen Drawing",
+  "description": "Disegna sul lockscreen e condividi i disegni in tempo reale con il tuo partner con colori, penne, effetti e sticker.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
