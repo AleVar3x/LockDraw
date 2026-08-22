@@ -55,6 +55,21 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val connectionStatus: StateFlow<ConnectionStatus> = repository.connectionStatus
     val partnerPresence: StateFlow<PartnerPresence> = repository.partnerPresence
     val roomCode: StateFlow<String> = repository.roomCode
+    val myName: StateFlow<String> = repository.myName
+    val partnerCustomName: StateFlow<String> = repository.partnerCustomName
+
+    fun setMyName(name: String) {
+        repository.setMyName(name)
+    }
+
+    fun setPartnerCustomName(name: String) {
+        repository.setPartnerCustomName(name)
+    }
+
+    fun generateNewRandomRoomCode() {
+        val newCode = PartnerSyncManager.generateRandomRoomCode(16)
+        repository.connectToRoomCode(newCode)
+    }
 
     fun unmatchPartner() {
         repository.unmatchPartner()

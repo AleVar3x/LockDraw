@@ -205,6 +205,15 @@ class FloatingDrawingService : Service() {
                     FloatingBubbleView(
                         repository = repository,
                         isExpanded = isOverlayExpanded,
+                        onMove = { dx, dy ->
+                            bubbleParams.x += dx.toInt()
+                            bubbleParams.y += dy.toInt()
+                            try {
+                                windowManager.updateViewLayout(bubbleView, bubbleParams)
+                            } catch (e: Exception) {
+                                // ignore
+                            }
+                        },
                         onToggle = {
                             if (isOverlayExpanded) {
                                 minimizeToBubble()
@@ -215,49 +224,6 @@ class FloatingDrawingService : Service() {
                     )
                 }
             }
-
-            // Drag touch handling
-            setOnTouchListener(object : View.OnTouchListener {
-                private var initialX = 0
-                private var initialY = 0
-                private var initialTouchX = 0f
-                private var initialTouchY = 0f
-                private var isDragging = false
-
-                override fun onTouch(v: View, event: MotionEvent): Boolean {
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            initialX = bubbleParams.x
-                            initialY = bubbleParams.y
-                            initialTouchX = event.rawX
-                            initialTouchY = event.rawY
-                            isDragging = false
-                            return false
-                        }
-                        MotionEvent.ACTION_MOVE -> {
-                            val dx = (event.rawX - initialTouchX).toInt()
-                            val dy = (event.rawY - initialTouchY).toInt()
-                            if (abs(dx) > 10 || abs(dy) > 10) {
-                                isDragging = true
-                                bubbleParams.x = initialX + dx
-                                bubbleParams.y = initialY + dy
-                                try {
-                                    windowManager.updateViewLayout(bubbleView, bubbleParams)
-                                } catch (e: Exception) {
-                                    // ignore
-                                }
-                                return true
-                            }
-                        }
-                        MotionEvent.ACTION_UP -> {
-                            if (isDragging) {
-                                return true
-                            }
-                        }
-                    }
-                    return false
-                }
-            })
         }
 
         try {

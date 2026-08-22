@@ -1,6 +1,5 @@
 package com.example.service
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,29 +12,25 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,9 +40,6 @@ import com.example.ui.components.BrushPaletteBar
 import com.example.ui.components.ColorPickerBar
 import com.example.ui.components.DrawingCanvas
 import com.example.ui.components.StickerBottomSheet
-import com.example.ui.components.WallpaperBottomSheet
-import com.example.util.WallpaperTarget
-import kotlinx.coroutines.launch
 
 @Composable
 fun FloatingOverlayCanvas(
@@ -55,9 +47,6 @@ fun FloatingOverlayCanvas(
     onMinimizeToBubble: () -> Unit,
     onCloseService: () -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
     val strokes by repository.strokes.collectAsState()
     val currentDraft by repository.currentDraftStroke.collectAsState()
     val partnerDraft by repository.partnerDraftStroke.collectAsState()
@@ -68,12 +57,10 @@ fun FloatingOverlayCanvas(
     val strokeWidth by repository.strokeWidth.collectAsState()
     val strokeAlpha by repository.strokeAlpha.collectAsState()
     val partnerPresence by repository.partnerPresence.collectAsState()
-    val roomCode by repository.roomCode.collectAsState()
     val floatingReactions by repository.floatingReactions.collectAsState()
-    val lockscreenConfig by repository.lockscreenConfig.collectAsState()
 
     var showStickersSheet by remember { mutableStateOf(false) }
-    var showWallpaperSheet by remember { mutableStateOf(false) }
+    var showClearConfirmation by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -134,14 +121,13 @@ fun FloatingOverlayCanvas(
                 onSelectStrokeWidth = { repository.setStrokeWidth(it) },
                 onSelectStrokeAlpha = { repository.setStrokeAlpha(it) },
                 onOpenStickers = { showStickersSheet = true },
-                onOpenWallpapers = { showWallpaperSheet = true },
-                onClearCanvas = { repository.clearAllCanvas() },
+                onClearCanvas = { showClearConfirmation = true },
                 onUndo = { repository.undo() },
                 onRedo = { repository.redo() }
             )
         }
 
-        // Stickers Bottom Sheet
+        // Stickers Bottom Sheet Overlay
         if (showStickersSheet) {
             StickerBottomSheet(
                 onDismiss = { showStickersSheet = false },
@@ -152,18 +138,75 @@ fun FloatingOverlayCanvas(
             )
         }
 
-        // Wallpaper / Lockscreen Options Sheet
-        if (showWallpaperSheet) {
-            WallpaperBottomSheet(
-                currentTheme = lockscreenConfig.wallpaperTheme,
-                isOverlayVisible = true,
-                onSelectTheme = { theme ->
-                    repository.setWallpaperTheme(theme)
-                    showWallpaperSheet = false
-                },
-                onToggleOverlay = { repository.toggleLockscreenOverlay() },
-                onDismiss = { showWallpaperSheet = false }
-            )
+        // Clear Canvas Confirmation Overlay
+        if (showClearConfirmation) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x99000000))
+                    .clickable { showClearConfirmation = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    color = Color(0xFF1E1D30),
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0x44FF5252)),
+                    modifier = Modifier
+                        .fillMaxWidth(0.88f)
+                        .clickable(enabled = false) {}
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = null,
+                            tint = Color(0xFFFF5252),
+                            modifier = Modifier.size(38.dp)
+                        )
+
+                        Text(
+                            text = "Cancellare la lavagna?",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = Color.White
+                        )
+
+                        Text(
+                            text = "Verranno rimossi tutti i tratti e gli sticker dallo schermo condiviso.",
+                            fontSize = 13.sp,
+                            color = Color(0xFFB0AEC7),
+                            lineHeight = 18.sp
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            TextButton(
+                                onClick = { showClearConfirmation = false },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Annulla", color = Color(0xFFB0AEC7))
+                            }
+
+                            Button(
+                                onClick = {
+                                    repository.clearAllCanvas()
+                                    showClearConfirmation = false
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1.3f)
+                            ) {
+                                Text("Cancella Tutto", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

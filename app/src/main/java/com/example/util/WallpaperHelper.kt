@@ -174,15 +174,21 @@ object WallpaperHelper {
 
             val wallpaperManager = WallpaperManager.getInstance(context)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val flags = when (target) {
-                    WallpaperTarget.LOCKSCREEN -> WallpaperManager.FLAG_LOCK
-                    WallpaperTarget.HOMESCREEN -> WallpaperManager.FLAG_SYSTEM
-                    WallpaperTarget.BOTH -> WallpaperManager.FLAG_LOCK or WallpaperManager.FLAG_SYSTEM
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    val flags = when (target) {
+                        WallpaperTarget.LOCKSCREEN -> WallpaperManager.FLAG_LOCK
+                        WallpaperTarget.HOMESCREEN -> WallpaperManager.FLAG_SYSTEM
+                        WallpaperTarget.BOTH -> WallpaperManager.FLAG_LOCK or WallpaperManager.FLAG_SYSTEM
+                    }
+                    wallpaperManager.setBitmap(bitmap, null, true, flags)
+                } else {
+                    wallpaperManager.setBitmap(bitmap)
                 }
-                wallpaperManager.setBitmap(bitmap, null, true, flags)
-            } else {
-                wallpaperManager.setBitmap(bitmap)
+            } finally {
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
             }
 
             Log.d("WallpaperHelper", "Wallpaper successfully set to: $target")

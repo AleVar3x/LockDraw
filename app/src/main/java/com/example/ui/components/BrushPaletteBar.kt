@@ -85,14 +85,12 @@ fun BrushPaletteBar(
     onSelectStrokeWidth: (Float) -> Unit,
     onSelectStrokeAlpha: (Float) -> Unit,
     onOpenStickers: () -> Unit,
-    onOpenWallpapers: () -> Unit,
     onClearCanvas: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showSliders by remember { mutableStateOf(false) }
-    var showClearDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -277,32 +275,6 @@ fun BrushPaletteBar(
                     Text("Sticker", fontSize = 9.sp, color = Color.White.copy(alpha = 0.75f))
                 }
 
-                // Wallpaper Button
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { onOpenWallpapers() }
-                ) {
-                    Surface(
-                        color = Color(0x2826283C),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .size(46.dp)
-                            .testTag("open_wallpapers_btn"),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF))
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.Wallpaper,
-                                contentDescription = "Sfondo",
-                                tint = Color(0xFFC2E7FF),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text("Sfondo", fontSize = 9.sp, color = Color.White.copy(alpha = 0.75f))
-                }
-
                 Box(
                     modifier = Modifier
                         .height(36.dp)
@@ -345,7 +317,7 @@ fun BrushPaletteBar(
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x66FF5252)),
                     modifier = Modifier
                         .size(46.dp)
-                        .clickable { showClearDialog = true }
+                        .clickable { onClearCanvas() }
                         .testTag("clear_all_btn")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -355,76 +327,6 @@ fun BrushPaletteBar(
                             tint = Color(0xFFFF8A80),
                             modifier = Modifier.size(20.dp)
                         )
-                    }
-                }
-            }
-        }
-    }
-
-    if (showClearDialog) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0x99000000))
-                .clickable { showClearDialog = false },
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                color = Color(0xFF1E1D30),
-                shape = RoundedCornerShape(20.dp),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0x44FF5252)),
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .clickable(enabled = false) {}
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = null,
-                        tint = Color(0xFFFF5252),
-                        modifier = Modifier.size(36.dp)
-                    )
-
-                    Text(
-                        text = "Cancellare il disegno?",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        color = Color.White
-                    )
-
-                    Text(
-                        text = "Verranno rimossi tutti i tratti e gli sticker dallo schermo condiviso. Lo sfondo rimarrà intatto.",
-                        fontSize = 13.sp,
-                        color = Color(0xFFB0AEC7),
-                        lineHeight = 18.sp
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        TextButton(
-                            onClick = { showClearDialog = false },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Annulla", color = Color(0xFFB0AEC7))
-                        }
-
-                        Button(
-                            onClick = {
-                                onClearCanvas()
-                                showClearDialog = false
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.3f)
-                        ) {
-                            Text("Cancella Tutto", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
                     }
                 }
             }

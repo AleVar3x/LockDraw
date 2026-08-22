@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -45,18 +46,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 val PRESET_COLORS = listOf(
-    Color(0xFFD0BCFF), // Frosted Lavender
-    Color(0xFFFFB4AB), // Frosted Coral
-    Color(0xFFC2E7FF), // Frosted Sky
-    Color(0xFFB4E495), // Frosted Mint
-    Color(0xFFFEE285), // Frosted Butter
-    Color(0xFFFFFFFF), // Pure White
-    Color(0xFFFF2A6D), // Neon Pink
-    Color(0xFFFF9100), // Bright Amber
-    Color(0xFF00E5FF), // Cyan Glow
-    Color(0xFF7C4DFF), // Violet
-    Color(0xFF4F378B), // Deep Plum
-    Color(0xFF1E1E24)  // Dark Ink
+    Color(0xFFFF0055), // Hot Neon Pink
+    Color(0xFF00F5FF), // Vivid Neon Cyan
+    Color(0xFF00FF66), // Laser Lime Green
+    Color(0xFFFFEA00), // Electric Neon Yellow
+    Color(0xFFFF6D00), // Radiant Orange
+    Color(0xFFD500F9), // Hyper Magenta
+    Color(0xFF00E5FF), // Bright Celeste
+    Color(0xFF7C4DFF), // Electric Violet
+    Color(0xFFFF1744), // Fluorescent Red
+    Color(0xFF00E676), // Mint Emerald
+    Color(0xFFFFFFFF), // Pure Brilliant White
+    Color(0xFF101014)  // Pitch Black
 )
 
 @Composable
@@ -95,7 +96,7 @@ fun ColorPickerBar(
                     Box(
                         modifier = Modifier
                             .size(8.dp)
-                            .background(if (color == Color.White || color == Color(0xFFFEE285) || color == Color(0xFFC2E7FF)) Color.Black else Color.White, CircleShape)
+                            .background(if (color == Color.White || color == Color(0xFFFFEA00) || color == Color(0xFF00F5FF)) Color.Black else Color.White, CircleShape)
                     )
                 }
             }
@@ -123,7 +124,7 @@ fun ColorPickerBar(
     }
 
     if (showCustomDialog) {
-        CustomColorDialog(
+        CustomColorOverlayDialog(
             initialColor = selectedColor,
             onDismiss = { showCustomDialog = false },
             onConfirm = { color ->
@@ -135,7 +136,7 @@ fun ColorPickerBar(
 }
 
 @Composable
-fun CustomColorDialog(
+fun CustomColorOverlayDialog(
     initialColor: Color,
     onDismiss: () -> Unit,
     onConfirm: (Color) -> Unit
@@ -146,33 +147,41 @@ fun CustomColorDialog(
 
     val currentColor = Color(red, green, blue)
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF161726),
-        titleContentColor = Color.White,
-        textContentColor = Color.White.copy(alpha = 0.85f),
-        title = {
-            Text(
-                text = "Tavolozza Colori Personalizzata",
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp
-            )
-        },
-        text = {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = Color(0xFF161726),
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0x40D0BCFF)),
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .clickable(enabled = false) {}
+        ) {
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Text(
+                    text = "Tavolozza Colori Personalizzata",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = Color.White
+                )
+
                 // Color Preview Box
                 Box(
                     modifier = Modifier
-                        .size(80.dp)
+                        .size(70.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(currentColor)
                         .border(2.dp, Color(0x66FFFFFF), RoundedCornerShape(16.dp))
                 )
-
-                Spacer(modifier = Modifier.height(16.dp))
 
                 // Red Slider
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -209,23 +218,32 @@ fun CustomColorDialog(
                     )
                     Text(text = "${(blue * 255).toInt()}", color = Color.White, modifier = Modifier.width(36.dp), fontSize = 12.sp)
                 }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(currentColor) },
-                colors = ButtonDefaults.buttonColors(containerColor = currentColor)
-            ) {
-                Text(
-                    text = "Applica Colore",
-                    color = if (red + green + blue > 1.8f) Color.Black else Color.White
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Annulla", color = Color(0xFFD0BCFF))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Annulla", color = Color(0xFFD0BCFF))
+                    }
+
+                    Button(
+                        onClick = { onConfirm(currentColor) },
+                        colors = ButtonDefaults.buttonColors(containerColor = currentColor),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1.3f)
+                    ) {
+                        Text(
+                            text = "Applica Colore",
+                            color = if (red + green + blue > 1.8f) Color.Black else Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
-    )
+    }
 }

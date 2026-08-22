@@ -115,6 +115,16 @@ class DrawingRepository private constructor(private val application: Application
     val connectionStatus: StateFlow<ConnectionStatus> = syncManager.connectionStatus
     val partnerPresence: StateFlow<PartnerPresence> = syncManager.partnerPresence
     val roomCode: StateFlow<String> = syncManager.currentRoomCode
+    val myName: StateFlow<String> = syncManager.myName
+    val partnerCustomName: StateFlow<String> = syncManager.partnerCustomName
+
+    fun setMyName(name: String) {
+        syncManager.setMyName(name)
+    }
+
+    fun setPartnerCustomName(name: String) {
+        syncManager.setPartnerCustomName(name)
+    }
 
     init {
         listenToIncomingSyncActions()
@@ -244,14 +254,12 @@ class DrawingRepository private constructor(private val application: Application
                         }
                     }
                     is SyncAction.FullSnapshot -> {
-                        // Received complete canvas snapshot from partner
-                        if (action.strokes.isNotEmpty() || action.stickers.isNotEmpty()) {
-                            _strokes.value = action.strokes
-                            _placedStickers.value = action.stickers
-                            _lockscreenConfig.value = _lockscreenConfig.value.copy(wallpaperTheme = action.wallpaperTheme)
-                            persistCurrentState()
-                            handlePartnerUpdatedDrawing()
-                        }
+                        // Received complete canvas snapshot from partner (including after erasing)
+                        _strokes.value = action.strokes
+                        _placedStickers.value = action.stickers
+                        _lockscreenConfig.value = _lockscreenConfig.value.copy(wallpaperTheme = action.wallpaperTheme)
+                        persistCurrentState()
+                        handlePartnerUpdatedDrawing()
                     }
                     else -> {}
                 }
@@ -277,6 +285,10 @@ class DrawingRepository private constructor(private val application: Application
         )
         _currentDraftStroke.value = stroke
 
+        if (stroke.brushType == BrushType.ERASER) {
+            applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value)
+        }
+
         syncManager.broadcastAction(
             SyncAction.StrokeBegin(
                 strokeId = stroke.id,
@@ -299,7 +311,7 @@ class DrawingRepository private constructor(private val application: Application
         _currentDraftStroke.value = updatedStroke
 
         if (current.brushType == BrushType.ERASER) {
-            applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value / 1000f)
+            applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value)
         }
 
         if (updatedPoints.size % 2 == 0) {
@@ -322,9 +334,12 @@ class DrawingRepository private constructor(private val application: Application
 
     fun finishDrawing() {
         val current = _currentDraftStroke.value ?: return
+        val isEraser = current.brushType == BrushType.ERASER
         val finalStroke = current.copy(authorId = syncManager.myDeviceId)
-        if (current.brushType != BrushType.ERASER) {
+        if (!isEraser) {
             _strokes.value = _strokes.value + finalStroke
+        } else {
+            applyEraserPoints(finalStroke.points, finalStroke.strokeWidth)
         }
         _currentDraftStroke.value = null
 
@@ -342,26 +357,66 @@ class DrawingRepository private constructor(private val application: Application
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
     }
 
-    private fun applyEraserPoint(x: Float, y: Float, radius: Float) {
-        val threshold = radius * 2.5f
+    private fun distanceSqToSegment(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
+        val dx = bx - ax
+        val dy = by - ay
+        val lenSq = dx * dx + dy * dy
+        if (lenSq < 1e-7f) {
+            val dpx = px - ax
+            val dpy = py - ay
+            return dpx * dpx + dpy * dpy
+        }
+        val t = ((px - ax) * dx + (py - ay) * dy) / lenSq
+        val clampedT = t.coerceIn(0f, 1f)
+        val projX = ax + clampedT * dx
+        val projY = ay + clampedT * dy
+        val dpx = px - projX
+        val dpy = py - projY
+        return dpx * dpx + dpy * dpy
+    }
+
+    private fun applyEraserPoint(x: Float, y: Float, eraserStrokeWidth: Float) {
+        val eraserRadius = (eraserStrokeWidth / 450f).coerceIn(0.035f, 0.16f)
+
         _strokes.value = _strokes.value.filterNot { stroke ->
-            stroke.points.any { p ->
+            val strokeRadius = (stroke.strokeWidth / 900f).coerceIn(0.008f, 0.05f)
+            val combinedRadius = eraserRadius + strokeRadius
+            val combinedRadiusSq = combinedRadius * combinedRadius
+
+            if (stroke.points.isEmpty()) {
+                false
+            } else if (stroke.points.size == 1) {
+                val p = stroke.points[0]
                 val dx = p.x - x
                 val dy = p.y - y
-                (dx * dx + dy * dy) < (threshold * threshold)
+                (dx * dx + dy * dy) <= combinedRadiusSq
+            } else {
+                var intersects = false
+                for (i in 1 until stroke.points.size) {
+                    val p1 = stroke.points[i - 1]
+                    val p2 = stroke.points[i]
+                    if (distanceSqToSegment(x, y, p1.x, p1.y, p2.x, p2.y) <= combinedRadiusSq) {
+                        intersects = true
+                        break
+                    }
+                }
+                intersects
             }
         }
+
+        val stickerHitRadius = eraserRadius + 0.06f
+        val stickerHitRadiusSq = stickerHitRadius * stickerHitRadius
         _placedStickers.value = _placedStickers.value.filterNot { st ->
             val dx = st.x - x
             val dy = st.y - y
-            (dx * dx + dy * dy) < (0.05f * 0.05f)
+            (dx * dx + dy * dy) <= stickerHitRadiusSq
         }
     }
 
     private fun applyEraserPoints(points: List<DrawingPoint>, strokeWidth: Float) {
-        val radius = strokeWidth / 1000f
+        if (points.isEmpty()) return
         points.forEach { pt ->
-            applyEraserPoint(pt.x, pt.y, radius)
+            applyEraserPoint(pt.x, pt.y, strokeWidth)
         }
     }
 

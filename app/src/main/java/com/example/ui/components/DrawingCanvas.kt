@@ -83,8 +83,8 @@ fun DrawingCanvas(
             .fillMaxSize()
             .testTag("drawing_canvas_container")
     ) {
-        val canvasWidth = constraints.maxWidth.toFloat()
-        val canvasHeight = constraints.maxHeight.toFloat()
+        val canvasWidth = if (constraints.maxWidth > 0) constraints.maxWidth.toFloat() else 1080f
+        val canvasHeight = if (constraints.maxHeight > 0) constraints.maxHeight.toFloat() else 1920f
 
         // Drawing Gesture & Canvas Layer
         Canvas(
@@ -95,14 +95,18 @@ fun DrawingCanvas(
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragStart = { offset ->
-                                val normX = (offset.x / canvasWidth).coerceIn(0f, 1f)
-                                val normY = (offset.y / canvasHeight).coerceIn(0f, 1f)
+                                val safeW = if (canvasWidth > 0f) canvasWidth else 1f
+                                val safeH = if (canvasHeight > 0f) canvasHeight else 1f
+                                val normX = (offset.x / safeW).coerceIn(0f, 1f)
+                                val normY = (offset.y / safeH).coerceIn(0f, 1f)
                                 onStartDraw(normX, normY)
                             },
                             onDrag = { change, _ ->
                                 change.consume()
-                                val normX = (change.position.x / canvasWidth).coerceIn(0f, 1f)
-                                val normY = (change.position.y / canvasHeight).coerceIn(0f, 1f)
+                                val safeW = if (canvasWidth > 0f) canvasWidth else 1f
+                                val safeH = if (canvasHeight > 0f) canvasHeight else 1f
+                                val normX = (change.position.x / safeW).coerceIn(0f, 1f)
+                                val normY = (change.position.y / safeH).coerceIn(0f, 1f)
                                 onContinueDraw(normX, normY)
                             },
                             onDragEnd = {
@@ -154,8 +158,10 @@ fun DrawingCanvas(
                     .rotate(sticker.rotation)
                     .pointerInput(sticker.id) {
                         detectTransformGestures { _, pan, zoom, rotation ->
-                            val newX = (stickerPxX + pan.x) / canvasWidth
-                            val newY = (stickerPxY + pan.y) / canvasHeight
+                            val safeW = if (canvasWidth > 0f) canvasWidth else 1f
+                            val safeH = if (canvasHeight > 0f) canvasHeight else 1f
+                            val newX = ((stickerPxX + pan.x) / safeW).coerceIn(0f, 1f)
+                            val newY = ((stickerPxY + pan.y) / safeH).coerceIn(0f, 1f)
                             onUpdateStickerPos(sticker.id, newX, newY)
                             if (zoom != 1f || rotation != 0f) {
                                 onUpdateStickerTransform(sticker.id, zoom, rotation)
@@ -260,7 +266,7 @@ fun DrawingCanvas(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "✏️ Partner",
+                            text = "✏️ ${partnerPresence.partnerName.ifBlank { "Partner" }}",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -357,32 +363,42 @@ private fun DrawScope.renderStroke(stroke: DrawingStroke, canvasW: Float, canvas
             )
         }
         BrushType.NEON -> {
-            // Neon outer soft glow pass
+            // Neon outer wide diffuse aura
             drawPath(
                 path = path,
-                color = baseColor.copy(alpha = 0.35f),
+                color = baseColor.copy(alpha = (stroke.alpha * 0.25f).coerceIn(0.05f, 0.4f)),
                 style = Stroke(
-                    width = stroke.strokeWidth * 2.8f,
+                    width = stroke.strokeWidth * 4.2f,
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )
             )
-            // Neon inner bright core pass
+            // Neon intense mid aura
             drawPath(
                 path = path,
-                color = Color.White.copy(alpha = 0.95f),
+                color = baseColor.copy(alpha = (stroke.alpha * 0.6f).coerceIn(0.1f, 0.85f)),
                 style = Stroke(
-                    width = stroke.strokeWidth * 0.7f,
+                    width = stroke.strokeWidth * 2.5f,
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )
             )
-            // Neon accent colored edge pass
+            // Neon saturated edge beam
             drawPath(
                 path = path,
-                color = baseColor,
+                color = baseColor.copy(alpha = (stroke.alpha * 0.95f).coerceIn(0.2f, 1.0f)),
                 style = Stroke(
                     width = stroke.strokeWidth * 1.3f,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+            // Neon pure brilliant laser core
+            drawPath(
+                path = path,
+                color = Color.White.copy(alpha = (stroke.alpha * 0.98f).coerceIn(0.3f, 1.0f)),
+                style = Stroke(
+                    width = (stroke.strokeWidth * 0.55f).coerceAtLeast(2f),
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )
@@ -424,7 +440,24 @@ private fun DrawScope.renderStroke(stroke: DrawingStroke, canvasW: Float, canvas
             )
         }
         BrushType.ERASER -> {
-            // Handled at point interception level, fallback clear stroke
+            // Render active eraser cursor ring for real-time visual touch feedback
+            val lastPt = stroke.points.lastOrNull()
+            if (lastPt != null) {
+                val cx = lastPt.x * canvasW
+                val cy = lastPt.y * canvasH
+                val radius = ((stroke.strokeWidth / 450f).coerceIn(0.035f, 0.16f) * canvasW).coerceAtLeast(18f)
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.35f),
+                    radius = radius,
+                    center = Offset(cx, cy)
+                )
+                drawCircle(
+                    color = Color(0xFFFF2A6D),
+                    radius = radius,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 2.5f)
+                )
+            }
         }
     }
 }

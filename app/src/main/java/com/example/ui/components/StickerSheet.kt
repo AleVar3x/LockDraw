@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -70,135 +71,144 @@ val STICKER_CATEGORIES = listOf(
     )
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StickerBottomSheet(
     onDismiss: () -> Unit,
     onSelectSticker: (String) -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedCategoryIndex by remember { mutableStateOf(0) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Color(0xFF161726),
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(vertical = 10.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(Color.White.copy(alpha = 0.2f))
-                    .height(4.dp)
-                    .fillMaxWidth(0.15f)
-            )
-        }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.BottomCenter
     ) {
-        Column(
+        Surface(
+            color = Color(0xF0141524),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0x38FFFFFF)),
+            shadowElevation = 16.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 32.dp)
+                .clickable(enabled = false) {}
         ) {
-            Text(
-                text = "Aggiungi uno Sticker",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-
-            // Category Selector Chips
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .padding(bottom = 24.dp)
             ) {
-                items(STICKER_CATEGORIES.indices.toList()) { idx ->
-                    val cat = STICKER_CATEGORIES[idx]
-                    val isSelected = idx == selectedCategoryIndex
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { selectedCategoryIndex = idx },
-                        label = { Text(cat.name, fontSize = 13.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF4F378B),
-                            selectedLabelColor = Color.White,
-                            containerColor = Color(0x18FFFFFF),
-                            labelColor = Color.White.copy(alpha = 0.8f)
-                        )
-                    )
-                }
-            }
+                // Drag handle bar
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(bottom = 12.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color.White.copy(alpha = 0.3f))
+                        .height(4.dp)
+                        .fillMaxWidth(0.12f)
+                )
 
-            Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = "Aggiungi uno Sticker",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
 
-            // Sticker Grid
-            val currentStickers = STICKER_CATEGORIES[selectedCategoryIndex].items
-            val isMessageCategory = selectedCategoryIndex == 3
-
-            if (isMessageCategory) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.height(280.dp)
+                // Category Selector Chips
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(currentStickers) { stickerText ->
-                        Surface(
-                            color = Color(0x22FFFFFF),
-                            shape = RoundedCornerShape(16.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onSelectSticker(stickerText)
-                                    onDismiss()
-                                }
-                                .testTag("sticker_chip_$stickerText")
-                        ) {
-                            Box(
-                                modifier = Modifier.padding(vertical = 12.dp, horizontal = 8.dp),
-                                contentAlignment = Alignment.Center
+                    items(STICKER_CATEGORIES.indices.toList()) { idx ->
+                        val cat = STICKER_CATEGORIES[idx]
+                        val isSelected = idx == selectedCategoryIndex
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { selectedCategoryIndex = idx },
+                            label = { Text(cat.name, fontSize = 13.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFF4F378B),
+                                selectedLabelColor = Color.White,
+                                containerColor = Color(0x18FFFFFF),
+                                labelColor = Color.White.copy(alpha = 0.8f)
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Sticker Grid
+                val currentStickers = STICKER_CATEGORIES[selectedCategoryIndex].items
+                val isMessageCategory = selectedCategoryIndex == 3
+
+                if (isMessageCategory) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.height(260.dp)
+                    ) {
+                        items(currentStickers) { stickerText ->
+                            Surface(
+                                color = Color(0x22FFFFFF),
+                                shape = RoundedCornerShape(14.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onSelectSticker(stickerText)
+                                    }
+                                    .testTag("sticker_chip_$stickerText")
                             ) {
-                                Text(
-                                    text = stickerText,
-                                    color = Color.White,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                Box(
+                                    modifier = Modifier.padding(vertical = 12.dp, horizontal = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = stickerText,
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.height(280.dp)
-                ) {
-                    items(currentStickers) { emoji ->
-                        Surface(
-                            color = Color(0x1CFFFFFF),
-                            shape = RoundedCornerShape(18.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF)),
-                            modifier = Modifier
-                                .clickable {
-                                    onSelectSticker(emoji)
-                                    onDismiss()
-                                }
-                                .testTag("sticker_emoji_$emoji")
-                        ) {
-                            Box(
-                                modifier = Modifier.padding(10.dp),
-                                contentAlignment = Alignment.Center
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.height(260.dp)
+                    ) {
+                        items(currentStickers) { emoji ->
+                            Surface(
+                                color = Color(0x1CFFFFFF),
+                                shape = RoundedCornerShape(16.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF)),
+                                modifier = Modifier
+                                    .clickable {
+                                        onSelectSticker(emoji)
+                                    }
+                                    .testTag("sticker_emoji_$emoji")
                             ) {
-                                Text(
-                                    text = emoji,
-                                    fontSize = 38.sp
-                                )
+                                Box(
+                                    modifier = Modifier.padding(8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = emoji,
+                                        fontSize = 34.sp
+                                    )
+                                }
                             }
                         }
                     }

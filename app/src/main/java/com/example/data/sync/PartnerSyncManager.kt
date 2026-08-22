@@ -7,11 +7,12 @@ import com.example.data.model.DrawingPoint
 import com.example.data.model.DrawingStroke
 import com.example.data.model.PlacedSticker
 import com.example.data.model.WallpaperTheme
+import com.example.util.NotificationHelper
+import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
@@ -56,23 +58,52 @@ class PartnerSyncManager(
 ) {
     private val prefs = context.getSharedPreferences("lockdraw_sync_prefs", Context.MODE_PRIVATE)
 
+    companion object {
+        private const val CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        const val TWO_WEEKS_MILLIS = 14L * 24 * 60 * 60 * 1000L // 2 weeks (1,209,600,000 ms)
+
+        fun generateRandomRoomCode(length: Int = 16): String {
+            return (1..length)
+                .map { CODE_CHARS.random() }
+                .joinToString("")
+        }
+    }
+
     val myDeviceId: String = prefs.getString("device_id", null) ?: run {
         val newId = "dev_" + UUID.randomUUID().toString().take(8)
         prefs.edit().putString("device_id", newId).apply()
         newId
     }
 
-    // Persisted Match Status
+    // User's custom display name and partner nickname override
+    private val _myName = MutableStateFlow(prefs.getString("my_name", "Io") ?: "Io")
+    val myName: StateFlow<String> = _myName.asStateFlow()
+
+    private val _partnerCustomName = MutableStateFlow(prefs.getString("partner_custom_name", "") ?: "")
+    val partnerCustomName: StateFlow<String> = _partnerCustomName.asStateFlow()
+
+    // Persisted Match Status (False on first launch until matched by user or partner)
     private val _isMatched = MutableStateFlow(prefs.getBoolean("is_matched", false))
     val isMatched: StateFlow<Boolean> = _isMatched.asStateFlow()
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.OFFLINE)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
 
-    private val _currentRoomCode = MutableStateFlow(prefs.getString("saved_room_code", "LOVE-779") ?: "LOVE-779")
+    // 16-character alphanumeric room code generated on first launch if not already saved
+    private val _currentRoomCode = MutableStateFlow(
+        prefs.getString("saved_room_code", null) ?: run {
+            val generated = generateRandomRoomCode(16)
+            prefs.edit().putString("saved_room_code", generated).apply()
+            generated
+        }
+    )
     val currentRoomCode: StateFlow<String> = _currentRoomCode.asStateFlow()
 
-    private val _partnerPresence = MutableStateFlow(PartnerPresence())
+    private val _partnerPresence = MutableStateFlow(
+        PartnerPresence(
+            partnerName = prefs.getString("partner_custom_name", "")?.ifBlank { "Partner" } ?: "Partner"
+        )
+    )
     val partnerPresence: StateFlow<PartnerPresence> = _partnerPresence.asStateFlow()
 
     private val _incomingActions = MutableSharedFlow<SyncAction>(
@@ -90,6 +121,8 @@ class PartnerSyncManager(
     private var draftThrottleJob: Job? = null
     private var pendingDraftAction: SyncAction? = null
 
+    private var lastNotifiedJoinTimestamp: Long = prefs.getLong("last_notified_join_ts", 0L)
+
     private val firestore by lazy {
         try {
             FirebaseFirestore.getInstance()
@@ -102,13 +135,53 @@ class PartnerSyncManager(
     init {
         val savedCode = _currentRoomCode.value
         connectToRoom(savedCode, markAsMatched = _isMatched.value)
+        purgeStaleRoomsIfAny()
+    }
+
+    fun setMyName(name: String) {
+        val clean = name.trim().ifBlank { "Io" }
+        _myName.value = clean
+        prefs.edit().putString("my_name", clean).apply()
+        broadcastMyPresenceName(clean)
+    }
+
+    fun setPartnerCustomName(name: String) {
+        val clean = name.trim()
+        _partnerCustomName.value = clean
+        prefs.edit().putString("partner_custom_name", clean).apply()
+        if (clean.isNotBlank()) {
+            _partnerPresence.value = _partnerPresence.value.copy(partnerName = clean)
+        }
+    }
+
+    private fun broadcastMyPresenceName(name: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val db = firestore ?: return@launch
+                val roomCode = _currentRoomCode.value
+                val now = System.currentTimeMillis()
+                db.collection("rooms").document(roomCode).set(
+                    mapOf(
+                        "presence_names" to mapOf(myDeviceId to name),
+                        "updatedAt" to now,
+                        "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                        "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                    ),
+                    SetOptions.merge()
+                )
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
     }
 
     /**
      * Connect and pair with a room in Firebase Firestore.
+     * When connecting, broadcast join event so the other device receives an instant notification
+     * and automatically updates its pairing state as well.
      */
     fun connectToRoom(code: String, markAsMatched: Boolean = true) {
-        val cleanCode = code.trim().uppercase().ifBlank { "LOVE-779" }
+        val cleanCode = code.trim().uppercase().ifBlank { generateRandomRoomCode(16) }
         _currentRoomCode.value = cleanCode
         _isMatched.value = markAsMatched
 
@@ -122,6 +195,27 @@ class PartnerSyncManager(
 
         startFirestoreListener(cleanCode)
         startHeartbeat()
+
+        // Broadcast join event to the room
+        scope.launch(Dispatchers.IO) {
+            try {
+                val db = firestore ?: return@launch
+                val now = System.currentTimeMillis()
+                val joinData = hashMapOf<String, Any>(
+                    "presence" to mapOf(myDeviceId to now),
+                    "presence_names" to mapOf(myDeviceId to _myName.value),
+                    "last_join_device_id" to myDeviceId,
+                    "last_join_name" to _myName.value,
+                    "last_join_timestamp" to now,
+                    "updatedAt" to now,
+                    "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                    "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                )
+                db.collection("rooms").document(cleanCode).set(joinData, SetOptions.merge())
+            } catch (e: Exception) {
+                Log.w("PartnerSync", "Failed to broadcast join event", e)
+            }
+        }
     }
 
     /**
@@ -131,7 +225,7 @@ class PartnerSyncManager(
         _isMatched.value = false
         prefs.edit().putBoolean("is_matched", false).apply()
         disconnectFirestore()
-        _partnerPresence.value = PartnerPresence(isOnline = false)
+        _partnerPresence.value = _partnerPresence.value.copy(isOnline = false)
         _connectionStatus.value = ConnectionStatus.OFFLINE
     }
 
@@ -168,29 +262,55 @@ class PartnerSyncManager(
     }
 
     private fun initEmptyRoom(docRef: DocumentReference) {
+        val now = System.currentTimeMillis()
         val data = hashMapOf<String, Any>(
-            "createdAt" to System.currentTimeMillis(),
-            "updatedAt" to System.currentTimeMillis(),
+            "createdAt" to now,
+            "updatedAt" to now,
+            "expiresAt" to (now + TWO_WEEKS_MILLIS),
+            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
             "strokes_json" to "[]",
             "stickers_json" to "[]",
             "wallpaperTheme" to "FROSTED_GLASS",
-            "presence" to mapOf(myDeviceId to System.currentTimeMillis())
+            "presence" to mapOf(myDeviceId to now),
+            "presence_names" to mapOf(myDeviceId to _myName.value),
+            "last_join_device_id" to myDeviceId,
+            "last_join_name" to _myName.value,
+            "last_join_timestamp" to now
         )
         docRef.set(data, SetOptions.merge())
     }
 
     private fun handleDocumentSnapshot(snapshot: DocumentSnapshot) {
         try {
-            // 1. Check partner presence
+            // Condition Firestore: If record hasn't been updated for > 2 weeks, delete it
+            val updatedAt = snapshot.getLong("updatedAt") ?: snapshot.getLong("createdAt") ?: 0L
+            val now = System.currentTimeMillis()
+            if (updatedAt > 0 && (now - updatedAt > TWO_WEEKS_MILLIS)) {
+                Log.i("PartnerSync", "Room record ${snapshot.id} has not been updated for > 2 weeks. Deleting Firestore record.")
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        snapshot.reference.delete()
+                    } catch (e: Exception) {
+                        Log.w("PartnerSync", "Failed to delete expired room doc", e)
+                    }
+                }
+                return
+            }
+
+            // 1. Check partner presence & name
             val presenceMap = snapshot.get("presence") as? Map<*, *>
+            val namesMap = snapshot.get("presence_names") as? Map<*, *>
             var partnerOnline = false
             var latestPartnerActive = 0L
+            var remotePartnerName: String? = null
+            var hasRemotePartnerDevice = false
+
             if (presenceMap != null) {
-                val now = System.currentTimeMillis()
                 for ((devId, timeVal) in presenceMap) {
                     val idStr = devId?.toString() ?: ""
                     val timeLong = (timeVal as? Number)?.toLong() ?: 0L
                     if (idStr != myDeviceId && idStr.isNotBlank()) {
+                        hasRemotePartnerDevice = true
                         if (now - timeLong < 35_000) {
                             partnerOnline = true
                             if (timeLong > latestPartnerActive) {
@@ -201,10 +321,50 @@ class PartnerSyncManager(
                 }
             }
 
+            if (namesMap != null) {
+                for ((devId, nameVal) in namesMap) {
+                    val idStr = devId?.toString() ?: ""
+                    val nameStr = nameVal?.toString() ?: ""
+                    if (idStr != myDeviceId && nameStr.isNotBlank()) {
+                        remotePartnerName = nameStr
+                        hasRemotePartnerDevice = true
+                    }
+                }
+            }
+
+            val customOverride = _partnerCustomName.value
+            val resolvedPartnerName = when {
+                customOverride.isNotBlank() -> customOverride
+                !remotePartnerName.isNullOrBlank() -> remotePartnerName
+                else -> _partnerPresence.value.partnerName.ifBlank { "Partner" }
+            }
+
             _partnerPresence.value = _partnerPresence.value.copy(
                 isOnline = partnerOnline,
+                partnerName = resolvedPartnerName,
                 lastActiveMillis = if (latestPartnerActive > 0) latestPartnerActive else _partnerPresence.value.lastActiveMillis
             )
+
+            // Auto-match if another device is present in the room
+            if (hasRemotePartnerDevice && !_isMatched.value) {
+                _isMatched.value = true
+                prefs.edit().putBoolean("is_matched", true).apply()
+            }
+
+            // Partner Join Notification detection
+            val lastJoinDeviceId = snapshot.getString("last_join_device_id")
+            val lastJoinTime = snapshot.getLong("last_join_timestamp") ?: 0L
+            val roomCode = snapshot.id
+
+            if (lastJoinDeviceId != null && lastJoinDeviceId != myDeviceId && lastJoinTime > 0) {
+                if (lastJoinTime > lastNotifiedJoinTimestamp) {
+                    lastNotifiedJoinTimestamp = lastJoinTime
+                    prefs.edit().putLong("last_notified_join_ts", lastJoinTime).apply()
+                    _isMatched.value = true
+                    prefs.edit().putBoolean("is_matched", true).apply()
+                    NotificationHelper.showPartnerConnectedNotification(context, resolvedPartnerName, roomCode)
+                }
+            }
 
             // 2. Check draft stroke
             val draftSender = snapshot.getString("draft_sender")
@@ -256,6 +416,31 @@ class PartnerSyncManager(
             Log.e("PartnerSync", "Error handling Firestore snapshot", e)
         }
     }
+
+    /**
+     * Purge rooms that have not been updated for 2 weeks.
+     */
+    private fun purgeStaleRoomsIfAny() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val db = firestore ?: return@launch
+                val twoWeeksAgo = System.currentTimeMillis() - TWO_WEEKS_MILLIS
+                db.collection("rooms")
+                    .whereLessThan("updatedAt", twoWeeksAgo)
+                    .limit(10)
+                    .get()
+                    .addOnSuccessListener { snapshots ->
+                        for (doc in snapshots.documents) {
+                            Log.i("PartnerSync", "Cleaning up stale room doc ${doc.id} inactive for > 2 weeks")
+                            doc.reference.delete()
+                        }
+                    }
+            } catch (e: Exception) {
+                // non-fatal cleanup check
+            }
+        }
+    }
+
 
     private fun parseStrokesFromJson(jsonString: String): List<DrawingStroke> {
         val strokes = mutableListOf<DrawingStroke>()
@@ -334,8 +519,16 @@ class PartnerSyncManager(
                 try {
                     val db = firestore ?: return@launch
                     val roomCode = _currentRoomCode.value
-                    db.collection("rooms").document(roomCode).update(
-                        "presence.$myDeviceId", System.currentTimeMillis()
+                    val now = System.currentTimeMillis()
+                    db.collection("rooms").document(roomCode).set(
+                        mapOf(
+                            "presence" to mapOf(myDeviceId to now),
+                            "presence_names" to mapOf(myDeviceId to _myName.value),
+                            "updatedAt" to now,
+                            "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                        ),
+                        SetOptions.merge()
                     )
                 } catch (e: Exception) {
                     // Ignore non-fatal heartbeat errors
@@ -391,13 +584,14 @@ class PartnerSyncManager(
     }
 
     /**
-     * Broadcast an action to Firestore.
+     * Broadcast an action to Firestore with 2-week TTL and expiration metadata.
      */
     fun broadcastAction(action: SyncAction) {
         val db = firestore ?: return
         val roomCode = _currentRoomCode.value
         val actionId = UUID.randomUUID().toString()
         processedActionIds.add(actionId)
+        val now = System.currentTimeMillis()
 
         when (action) {
             is SyncAction.StrokeBegin, is SyncAction.StrokePoints -> {
@@ -410,12 +604,17 @@ class PartnerSyncManager(
                         pendingDraftAction = null
                         if (toSend != null) {
                             val json = SyncActionSerializer.toJson(toSend)
-                            db.collection("rooms").document(roomCode).update(
-                                mapOf(
-                                    "draft_json" to json,
-                                    "draft_sender" to myDeviceId
+                            try {
+                                db.collection("rooms").document(roomCode).set(
+                                    mapOf(
+                                        "draft_json" to json,
+                                        "draft_sender" to myDeviceId
+                                    ),
+                                    SetOptions.merge()
                                 )
-                            )
+                            } catch (e: Exception) {
+                                // ignore
+                            }
                         }
                     }
                 }
@@ -426,7 +625,7 @@ class PartnerSyncManager(
                 val actionJson = SyncActionSerializer.toJson(action)
                 scope.launch(Dispatchers.IO) {
                     try {
-                        db.collection("rooms").document(roomCode).update(
+                        db.collection("rooms").document(roomCode).set(
                             mapOf(
                                 "draft_json" to FieldValue.delete(),
                                 "draft_sender" to FieldValue.delete(),
@@ -434,8 +633,11 @@ class PartnerSyncManager(
                                 "last_action_sender" to myDeviceId,
                                 "last_action_json" to actionJson,
                                 "updated_by" to myDeviceId,
-                                "updatedAt" to System.currentTimeMillis()
-                            )
+                                "updatedAt" to now,
+                                "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                                "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                            ),
+                            SetOptions.merge()
                         )
                     } catch (e: Exception) {
                         Log.e("PartnerSync", "Error updating finished stroke on Firestore", e)
@@ -484,7 +686,9 @@ class PartnerSyncManager(
                             "stickers_json" to stArr.toString(),
                             "wallpaperTheme" to action.wallpaperTheme.name,
                             "updated_by" to myDeviceId,
-                            "updatedAt" to System.currentTimeMillis(),
+                            "updatedAt" to now,
+                            "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
                             "draft_json" to FieldValue.delete()
                         )
                         db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
@@ -503,7 +707,9 @@ class PartnerSyncManager(
                             "last_action_sender" to myDeviceId,
                             "last_action_json" to SyncActionSerializer.toJson(action),
                             "updated_by" to myDeviceId,
-                            "updatedAt" to System.currentTimeMillis(),
+                            "updatedAt" to now,
+                            "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
                             "draft_json" to FieldValue.delete()
                         )
                         db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
@@ -517,14 +723,17 @@ class PartnerSyncManager(
                 val actionJson = SyncActionSerializer.toJson(action)
                 scope.launch(Dispatchers.IO) {
                     try {
-                        db.collection("rooms").document(roomCode).update(
+                        db.collection("rooms").document(roomCode).set(
                             mapOf(
                                 "last_action_id" to actionId,
                                 "last_action_sender" to myDeviceId,
                                 "last_action_json" to actionJson,
                                 "updated_by" to myDeviceId,
-                                "updatedAt" to System.currentTimeMillis()
-                            )
+                                "updatedAt" to now,
+                                "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                                "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                            ),
+                            SetOptions.merge()
                         )
                     } catch (e: Exception) {
                         Log.e("PartnerSync", "Error broadcasting action to Firestore", e)
@@ -677,3 +886,4 @@ class PartnerSyncManager(
         disconnectFirestore()
     }
 }
+

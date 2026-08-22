@@ -112,6 +112,8 @@ fun MainDrawingScreen(
     val isMatched by viewModel.isMatched.collectAsState()
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val partnerPresence by viewModel.partnerPresence.collectAsState()
+    val myName by viewModel.myName.collectAsState()
+    val partnerCustomName by viewModel.partnerCustomName.collectAsState()
     val strokes by viewModel.strokes.collectAsState()
     val currentDraftStroke by viewModel.currentDraftStroke.collectAsState()
     val partnerDraftStroke by viewModel.partnerDraftStroke.collectAsState()
@@ -126,6 +128,8 @@ fun MainDrawingScreen(
     val strokeWidth by viewModel.strokeWidth.collectAsState()
 
     var partnerCodeInput by remember { mutableStateOf("") }
+    var myNameInput by remember(myName) { mutableStateOf(myName) }
+    var partnerNameInput by remember(partnerCustomName) { mutableStateOf(partnerCustomName) }
     var showQrDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
     var hasOverlayPermission by remember { mutableStateOf(viewModel.canDrawOverlays(context)) }
@@ -722,13 +726,11 @@ fun MainDrawingScreen(
                             }
                         }
 
-                        // Generate New Random Code Button (Only available when NOT matched)
+                        // Generate New Random 16-character Code Button (Only available when NOT matched)
                         OutlinedButton(
                             onClick = {
-                                val prefixes = listOf("LOVE", "HEART", "ROSE", "SOUL", "COUPLE", "STAR", "HONEY")
-                                val newCode = "${prefixes.random()}-${Random.nextInt(100, 999)}"
-                                viewModel.connectToRoomCode(newCode)
-                                Toast.makeText(context, "Nuovo codice generato: $newCode", Toast.LENGTH_SHORT).show()
+                                viewModel.generateNewRandomRoomCode()
+                                Toast.makeText(context, "Nuovo codice 16 caratteri generato!", Toast.LENGTH_SHORT).show()
                             },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD0BCFF)),
                             border = BorderStroke(1.dp, Color(0x4D8E7CFF)),
@@ -741,7 +743,7 @@ fun MainDrawingScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Genera Nuovo Codice Stanza", fontSize = 13.sp)
+                            Text("Genera Nuovo Codice Stanza (16 car.)", fontSize = 13.sp)
                         }
                     }
                 }
@@ -781,7 +783,7 @@ fun MainDrawingScreen(
                                     fontSize = 16.sp
                                 )
                                 Text(
-                                    text = "Inserisci il codice fornito dall'altro smartphone",
+                                    text = "Inserisci il codice di 16 caratteri del partner",
                                     color = Color(0xFF9E9DB5),
                                     fontSize = 12.sp
                                 )
@@ -792,7 +794,7 @@ fun MainDrawingScreen(
                         OutlinedTextField(
                             value = partnerCodeInput,
                             onValueChange = { partnerCodeInput = it.uppercase() },
-                            placeholder = { Text("Es. LOVE-779", color = Color(0x66FFFFFF)) },
+                            placeholder = { Text("Es. 8K2M9PX4Y7Q1L3R5", color = Color(0x66FFFFFF)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.Characters,
@@ -854,6 +856,139 @@ fun MainDrawingScreen(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
+                        }
+                    }
+                }
+            }
+
+            // 4. IMPOSTAZIONE NOMI (Il tuo nome & Nome del partner sulla matita)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xD9161726)),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.2.dp, Color(0x28FFFFFF)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = Color(0xFF4A148C),
+                            shape = CircleShape,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Palette,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE1BEE7),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Nomi & Identità Disegno",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                            Text(
+                                text = "Personalizza il nome visualizzato sulla matita in tempo reale",
+                                color = Color(0xFF9E9DB5),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    // Il tuo nome
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Il tuo nome (trasmesso al partner)",
+                            color = Color(0xFFD0BCFF),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        OutlinedTextField(
+                            value = myNameInput,
+                            onValueChange = {
+                                myNameInput = it
+                                viewModel.setMyName(it)
+                            },
+                            placeholder = { Text("Es. Giulia", color = Color(0x55FFFFFF)) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFFD0BCFF),
+                                unfocusedBorderColor = Color(0x33FFFFFF),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedContainerColor = Color(0xFF100F1C),
+                                unfocusedContainerColor = Color(0xFF100F1C)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("my_name_input")
+                        )
+                    }
+
+                    // Nome del partner sulla matita
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Nome del partner (mostrato sulla matitina ✏️)",
+                            color = Color(0xFF80DEEA),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        OutlinedTextField(
+                            value = partnerNameInput,
+                            onValueChange = {
+                                partnerNameInput = it
+                                viewModel.setPartnerCustomName(it)
+                            },
+                            placeholder = { Text(partnerPresence.partnerName.ifBlank { "Es. Amore / Luca" }, color = Color(0x55FFFFFF)) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF80DEEA),
+                                unfocusedBorderColor = Color(0x33FFFFFF),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedContainerColor = Color(0xFF100F1C),
+                                unfocusedContainerColor = Color(0xFF100F1C)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("partner_name_input")
+                        )
+                    }
+
+                    // Active preview chip
+                    Surface(
+                        color = Color(0xFF222038),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Anteprima cursore partner:",
+                                color = Color(0xFFB0AEC7),
+                                fontSize = 12.sp
+                            )
+                            Surface(
+                                color = Color(0x4400E5FF),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = "✏️ ${partnerPresence.partnerName.ifBlank { "Partner" }}",
+                                    color = Color(0xFF80DEEA),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
                 }
