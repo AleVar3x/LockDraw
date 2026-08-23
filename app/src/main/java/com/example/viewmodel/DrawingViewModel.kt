@@ -53,10 +53,15 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val floatingReactions: StateFlow<List<FloatingHeartReaction>> = repository.floatingReactions
     val isMatched: StateFlow<Boolean> = repository.isMatched
     val connectionStatus: StateFlow<ConnectionStatus> = repository.connectionStatus
+    val lastSyncError: StateFlow<String?> = syncManager.lastSyncError
     val partnerPresence: StateFlow<PartnerPresence> = repository.partnerPresence
     val roomCode: StateFlow<String> = repository.roomCode
     val myName: StateFlow<String> = repository.myName
     val partnerCustomName: StateFlow<String> = repository.partnerCustomName
+
+    fun reconnectSync() {
+        syncManager.reconnect()
+    }
 
     fun setMyName(name: String) {
         repository.setMyName(name)

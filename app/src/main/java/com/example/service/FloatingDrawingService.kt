@@ -30,6 +30,8 @@ import com.example.util.WallpaperTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -51,7 +53,9 @@ class FloatingDrawingService : Service() {
     private lateinit var overlayParams: WindowManager.LayoutParams
     private lateinit var persistentDrawingParams: WindowManager.LayoutParams
 
-    private var isOverlayExpanded = false
+    private var currentBubbleX = 30
+    private var currentBubbleY = 350
+    private val isOverlayExpandedState = MutableStateFlow(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -84,8 +88,8 @@ class FloatingDrawingService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 30
-            y = 350
+            x = currentBubbleX
+            y = currentBubbleY
         }
 
         // 2. Interactive Fullscreen Canvas Overlay Params (When drawing mode is ACTIVE)
@@ -187,27 +191,33 @@ class FloatingDrawingService : Service() {
 
     private fun showBubble() {
         if (bubbleView != null) {
-            // Already added, just ensure its composition reflects current isOverlayExpanded
             return
         }
 
-        bubbleLifecycleOwner = OverlayLifecycleOwner().apply {
+        bubbleParams.x = currentBubbleX
+        bubbleParams.y = currentBubbleY
+
+        val lifecycleOwner = OverlayLifecycleOwner().apply {
             onCreate()
             onResume()
         }
+        bubbleLifecycleOwner = lifecycleOwner
 
         bubbleView = ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            bubbleLifecycleOwner?.attachToView(this)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(lifecycleOwner))
+            lifecycleOwner.attachToView(this)
 
             setContent {
                 MyApplicationTheme {
+                    val isExpanded by isOverlayExpandedState.collectAsState()
                     FloatingBubbleView(
                         repository = repository,
-                        isExpanded = isOverlayExpanded,
+                        isExpanded = isExpanded,
                         onMove = { dx, dy ->
-                            bubbleParams.x += dx.toInt()
-                            bubbleParams.y += dy.toInt()
+                            currentBubbleX += dx.toInt()
+                            currentBubbleY += dy.toInt()
+                            bubbleParams.x = currentBubbleX
+                            bubbleParams.y = currentBubbleY
                             try {
                                 windowManager.updateViewLayout(bubbleView, bubbleParams)
                             } catch (e: Exception) {
@@ -215,11 +225,7 @@ class FloatingDrawingService : Service() {
                             }
                         },
                         onToggle = {
-                            if (isOverlayExpanded) {
-                                minimizeToBubble()
-                            } else {
-                                expandOverlayCanvas()
-                            }
+                            expandOverlayCanvas()
                         }
                     )
                 }
@@ -236,22 +242,30 @@ class FloatingDrawingService : Service() {
     private fun expandOverlayCanvas() {
         if (overlayCanvasView != null) return
 
-        // Hide passive drawing layer while interactive drawing canvas is active
+        // Remove standalone bubble and passive drawing layer while interactive drawing canvas is active
+        removeBubble()
         removePersistentDrawingLayer()
 
-        overlayLifecycleOwner = OverlayLifecycleOwner().apply {
+        val lifecycleOwner = OverlayLifecycleOwner().apply {
             onCreate()
             onResume()
         }
+        overlayLifecycleOwner = lifecycleOwner
 
         overlayCanvasView = ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            overlayLifecycleOwner?.attachToView(this)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(lifecycleOwner))
+            lifecycleOwner.attachToView(this)
 
             setContent {
                 MyApplicationTheme {
                     FloatingOverlayCanvas(
                         repository = repository,
+                        initialBubbleX = currentBubbleX,
+                        initialBubbleY = currentBubbleY,
+                        onUpdateBubblePos = { x, y ->
+                            currentBubbleX = x
+                            currentBubbleY = y
+                        },
                         onMinimizeToBubble = {
                             minimizeToBubble()
                         },
@@ -265,16 +279,7 @@ class FloatingDrawingService : Service() {
 
         try {
             windowManager.addView(overlayCanvasView, overlayParams)
-            isOverlayExpanded = true
-            // Bring bubble to top so it's always accessible to toggle drawing off
-            bubbleView?.let {
-                try {
-                    windowManager.removeView(it)
-                    windowManager.addView(it, bubbleParams)
-                } catch (e: Exception) {
-                    // ignore
-                }
-            }
+            isOverlayExpandedState.value = true
         } catch (e: Exception) {
             showBubble()
         }
@@ -282,18 +287,10 @@ class FloatingDrawingService : Service() {
 
     private fun minimizeToBubble() {
         removeOverlayCanvas()
-        isOverlayExpanded = false
-        // Restore persistent non-touchable drawing layer
+        isOverlayExpandedState.value = false
+        // Restore persistent non-touchable drawing layer and standalone bubble
         showPersistentDrawingLayer()
-        // Ensure bubble is on top
-        bubbleView?.let {
-            try {
-                windowManager.removeView(it)
-                windowManager.addView(it, bubbleParams)
-            } catch (e: Exception) {
-                // ignore
-            }
-        }
+        showBubble()
     }
 
     private fun removeBubble() {

@@ -34,6 +34,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
 import com.example.data.model.BrushType
 import com.example.data.repository.DrawingRepository
 import com.example.ui.components.BrushPaletteBar
@@ -44,6 +46,9 @@ import com.example.ui.components.StickerBottomSheet
 @Composable
 fun FloatingOverlayCanvas(
     repository: DrawingRepository,
+    initialBubbleX: Int = 30,
+    initialBubbleY: Int = 350,
+    onUpdateBubblePos: (Int, Int) -> Unit = { _, _ -> },
     onMinimizeToBubble: () -> Unit,
     onCloseService: () -> Unit
 ) {
@@ -61,6 +66,9 @@ fun FloatingOverlayCanvas(
 
     var showStickersSheet by remember { mutableStateOf(false) }
     var showClearConfirmation by remember { mutableStateOf(false) }
+
+    var bubbleX by remember { mutableStateOf(initialBubbleX.toFloat()) }
+    var bubbleY by remember { mutableStateOf(initialBubbleY.toFloat()) }
 
     Box(
         modifier = Modifier
@@ -87,7 +95,26 @@ fun FloatingOverlayCanvas(
             isInteractive = true
         )
 
-        // 2. Bottom Frosted Glass Dock with Color Picker & Brushes (Dark-tinted for high contrast)
+        // 2. Floating Toggle/Close Bubble positioned right on screen where the user put it
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(bubbleX.toInt(), bubbleY.toInt()) }
+        ) {
+            FloatingBubbleView(
+                repository = repository,
+                isExpanded = true,
+                onMove = { dx, dy ->
+                    bubbleX = (bubbleX + dx).coerceAtLeast(0f)
+                    bubbleY = (bubbleY + dy).coerceAtLeast(0f)
+                    onUpdateBubblePos(bubbleX.toInt(), bubbleY.toInt())
+                },
+                onToggle = {
+                    onMinimizeToBubble()
+                }
+            )
+        }
+
+        // 3. Bottom Frosted Glass Dock with Color Picker & Brushes (Dark-tinted for high contrast)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -123,7 +150,8 @@ fun FloatingOverlayCanvas(
                 onOpenStickers = { showStickersSheet = true },
                 onClearCanvas = { showClearConfirmation = true },
                 onUndo = { repository.undo() },
-                onRedo = { repository.redo() }
+                onRedo = { repository.redo() },
+                onMinimize = { onMinimizeToBubble() }
             )
         }
 

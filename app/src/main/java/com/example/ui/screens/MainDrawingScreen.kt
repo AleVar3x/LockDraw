@@ -111,6 +111,7 @@ fun MainDrawingScreen(
     val roomCode by viewModel.roomCode.collectAsState()
     val isMatched by viewModel.isMatched.collectAsState()
     val connectionStatus by viewModel.connectionStatus.collectAsState()
+    val lastSyncError by viewModel.lastSyncError.collectAsState()
     val partnerPresence by viewModel.partnerPresence.collectAsState()
     val myName by viewModel.myName.collectAsState()
     val partnerCustomName by viewModel.partnerCustomName.collectAsState()
@@ -356,6 +357,49 @@ fun MainDrawingScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Abilita Permesso Disegno Fluttuante", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // Sync Status & Error Card (if any sync error or offline state occurs)
+            if (lastSyncError != null || connectionStatus == ConnectionStatus.OFFLINE) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xD92E1A1A)),
+                    shape = RoundedCornerShape(18.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFF8A80)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Stato Sincronizzazione Firebase",
+                                color = Color(0xFFFF8A80),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = lastSyncError ?: "Disconnesso da Firebase. Verifica la connessione di rete.",
+                                color = Color(0xFFF3E5E8),
+                                fontSize = 12.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                viewModel.reconnectSync()
+                                Toast.makeText(context, "Tentativo di riconnessione a Firebase...", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Riprova", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

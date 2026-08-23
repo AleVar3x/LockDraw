@@ -88,6 +88,7 @@ fun BrushPaletteBar(
     onClearCanvas: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    onMinimize: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showSliders by remember { mutableStateOf(false) }
@@ -326,6 +327,47 @@ fun BrushPaletteBar(
                             contentDescription = "Cancella Tutto",
                             tint = Color(0xFFFF8A80),
                             modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                if (onMinimize != null) {
+                    Box(
+                        modifier = Modifier
+                            .height(36.dp)
+                            .width(1.dp)
+                            .background(Color(0x33FFFFFF))
+                    )
+
+                    // Minimize / Done button
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onMinimize() }
+                    ) {
+                        Surface(
+                            color = Color(0xFF00B0FF),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .size(46.dp)
+                                .testTag("minimize_palette_btn"),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0x80FFFFFF)),
+                            shadowElevation = 4.dp
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Create,
+                                    contentDescription = "Chiudi Tavolozza",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Fatto",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF80D8FF)
                         )
                     }
                 }

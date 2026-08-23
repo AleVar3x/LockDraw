@@ -116,10 +116,14 @@ class PartnerSyncManager(
     private val processedActionIds = ConcurrentHashMap.newKeySet<String>()
 
     private var firestoreListener: ListenerRegistration? = null
+    private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
     private var simulationJob: Job? = null
     private var draftThrottleJob: Job? = null
     private var pendingDraftAction: SyncAction? = null
+
+    private val _lastSyncError = MutableStateFlow<String?>(null)
+    val lastSyncError: StateFlow<String?> = _lastSyncError.asStateFlow()
 
     private var lastNotifiedJoinTimestamp: Long = prefs.getLong("last_notified_join_ts", 0L)
 
@@ -229,11 +233,17 @@ class PartnerSyncManager(
         _connectionStatus.value = ConnectionStatus.OFFLINE
     }
 
+    fun reconnect() {
+        val code = _currentRoomCode.value
+        connectToRoom(code, markAsMatched = _isMatched.value)
+    }
+
     private fun startFirestoreListener(roomCode: String) {
         val db = firestore
         if (db == null) {
             Log.w("PartnerSync", "Firestore instance not available")
             _connectionStatus.value = ConnectionStatus.OFFLINE
+            _lastSyncError.value = "Firestore non inizializzato o non disponibile"
             return
         }
 
@@ -241,10 +251,16 @@ class PartnerSyncManager(
             val docRef = db.collection("rooms").document(roomCode)
             firestoreListener = docRef.addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.w("PartnerSync", "Firestore snapshot error: ${error.message}")
+                    val errMsg = error.message ?: error.code.name
+                    Log.w("PartnerSync", "Firestore snapshot error: $errMsg")
+                    _lastSyncError.value = "Errore sync: $errMsg"
                     _connectionStatus.value = ConnectionStatus.CONNECTING
+                    scheduleListenerReconnect(roomCode)
                     return@addSnapshotListener
                 }
+
+                _lastSyncError.value = null
+                reconnectJob?.cancel()
 
                 if (snapshot != null && snapshot.exists()) {
                     _connectionStatus.value = ConnectionStatus.CONNECTED
@@ -257,7 +273,21 @@ class PartnerSyncManager(
             }
         } catch (e: Exception) {
             Log.e("PartnerSync", "Failed to attach Firestore snapshot listener", e)
+            _lastSyncError.value = "Errore connessione: ${e.localizedMessage}"
             _connectionStatus.value = ConnectionStatus.OFFLINE
+            scheduleListenerReconnect(roomCode)
+        }
+    }
+
+    private fun scheduleListenerReconnect(roomCode: String) {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            delay(4000)
+            if (isActive && _currentRoomCode.value == roomCode) {
+                Log.i("PartnerSync", "Attempting automatic reconnection to room: $roomCode")
+                disconnectFirestore()
+                startFirestoreListener(roomCode)
+            }
         }
     }
 
@@ -872,6 +902,8 @@ class PartnerSyncManager(
 
     private fun disconnectFirestore() {
         try {
+            reconnectJob?.cancel()
+            reconnectJob = null
             firestoreListener?.remove()
             firestoreListener = null
         } catch (e: Exception) {
@@ -883,6 +915,7 @@ class PartnerSyncManager(
         simulationJob?.cancel()
         heartbeatJob?.cancel()
         draftThrottleJob?.cancel()
+        reconnectJob?.cancel()
         disconnectFirestore()
     }
 }

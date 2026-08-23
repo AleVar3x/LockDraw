@@ -8,8 +8,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -24,18 +24,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.repository.DrawingRepository
+import kotlin.math.hypot
 
 @Composable
 fun FloatingBubbleView(
@@ -46,8 +45,6 @@ fun FloatingBubbleView(
 ) {
     val partnerPresence by repository.partnerPresence.collectAsState()
     val partnerDraft by repository.partnerDraftStroke.collectAsState()
-
-    var hasDragged by remember { mutableStateOf(false) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -69,29 +66,49 @@ fun FloatingBubbleView(
         ),
         shadowElevation = 6.dp,
         modifier = Modifier
-            .size(48.dp)
+            .size(50.dp)
             .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { hasDragged = false },
-                    onDragEnd = { /* no-op */ },
-                    onDragCancel = { /* no-op */ },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        hasDragged = true
-                        onMove(dragAmount.x, dragAmount.y)
+                val touchSlop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var totalDragX = 0f
+                    var totalDragY = 0f
+                    var isDragging = false
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val currentChange = event.changes.firstOrNull { it.id == down.id } ?: break
+
+                        if (currentChange.pressed) {
+                            val change = currentChange.positionChange()
+                            totalDragX += change.x
+                            totalDragY += change.y
+                            val distance = hypot(totalDragX, totalDragY)
+
+                            if (!isDragging && distance > touchSlop) {
+                                isDragging = true
+                            }
+
+                            if (isDragging) {
+                                currentChange.consume()
+                                onMove(change.x, change.y)
+                            }
+                        } else {
+                            // Pointer released (UP)
+                            if (!isDragging) {
+                                currentChange.consume()
+                                onToggle()
+                            }
+                            break
+                        }
                     }
-                )
-            }
-            .clickable {
-                if (!hasDragged) {
-                    onToggle()
                 }
             }
             .testTag("floating_bubble_btn")
     ) {
         Box(
             modifier = Modifier
-                .size(48.dp)
+                .size(50.dp)
                 .background(
                     Brush.radialGradient(
                         colors = if (isExpanded) {
@@ -120,7 +137,7 @@ fun FloatingBubbleView(
                     Color(0xFFE0F7FA)
                 },
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(26.dp)
                     .scale(if (!isExpanded && partnerDraft != null) pulseScale else 1.0f)
             )
 
