@@ -3,15 +3,51 @@ package com.example.data.model
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 
-enum class BrushType(val displayName: String, val iconRes: String) {
-    PEN("Penna Inchiostro", "pen"),
-    PENCIL("Matita Tratteggio", "pencil"),
+enum class StrokeModifier(val displayName: String, val isPremium: Boolean = false) {
+    NONE("Normale", isPremium = false),
+    WAVE("Wave", isPremium = true),
+    PULSING("Pulsing", isPremium = true),
+    DOT_FLOW("Dot Flow", isPremium = true)
+}
+
+enum class BrushType(val displayName: String, val iconRes: String, val isPremium: Boolean = false) {
+    PEN("Penna", "pen"),
+    PENCIL("Matita", "pencil"),
     HIGHLIGHTER("Evidenziatore", "highlighter"),
     NEON("Neon Glow", "neon"),
-    RAINBOW("Effetto Arcobaleno", "rainbow"),
-    DOTTED("Pennello Puntinato", "dotted"),
-    ERASER("Gomma", "eraser")
+    RAINBOW("Arcobaleno", "rainbow"),
+    DOTTED("Puntini", "dotted"),
+    WAVY("Penna Ondulata", "wavy", isPremium = true),
+    ANIMATED_WAVE("Wave", "animated_wave", isPremium = true),
+    DOT_FLOW("Dot Flow", "dot_flow", isPremium = true),
+    PULSING_NEON("Pulsing", "pulsing_neon", isPremium = true),
+    ERASER("Gomma", "eraser");
+
+    fun getSupportedModifiers(): List<StrokeModifier> {
+        return when (this) {
+            DOTTED -> listOf(StrokeModifier.NONE, StrokeModifier.DOT_FLOW)
+            PEN, PENCIL, HIGHLIGHTER, NEON, RAINBOW -> listOf(
+                StrokeModifier.NONE,
+                StrokeModifier.WAVE,
+                StrokeModifier.PULSING
+            )
+            else -> listOf(StrokeModifier.NONE)
+        }
+    }
 }
+
+data class CustomStickerItem(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val title: String,
+    val emoji: String = "✨",
+    val backgroundColorArgb: Long = 0xFF4F378B,
+    val textColorArgb: Long = 0xFFFFFFFF,
+    val isDoodle: Boolean = false,
+    val doodlePoints: String? = null,
+    val imageUri: String? = null,
+    val imageBase64: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
 
 data class DrawingPoint(
     val x: Float,
@@ -27,7 +63,8 @@ data class DrawingStroke(
     val strokeWidth: Float = 12f,
     val brushType: BrushType = BrushType.PEN,
     val authorId: String = "me", // "me" or "partner"
-    val alpha: Float = 1.0f
+    val alpha: Float = 1.0f,
+    val modifier: StrokeModifier = StrokeModifier.NONE
 )
 
 data class PlacedSticker(

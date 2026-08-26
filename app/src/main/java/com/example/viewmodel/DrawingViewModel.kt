@@ -39,9 +39,15 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
 
     // Tooling state
     val selectedBrushType: StateFlow<BrushType> = repository.selectedBrushType
+    val selectedModifier: StateFlow<com.example.data.model.StrokeModifier> = repository.selectedModifier
     val selectedColor: StateFlow<Color> = repository.selectedColor
     val strokeWidth: StateFlow<Float> = repository.strokeWidth
     val strokeAlpha: StateFlow<Float> = repository.strokeAlpha
+
+    // VIP Premium & Paywall state
+    val isPremiumUnlocked: StateFlow<Boolean> = repository.isPremiumUnlocked
+    val partnerNotificationsEnabled: StateFlow<Boolean> = repository.partnerNotificationsEnabled
+    val customStickers: StateFlow<List<com.example.data.model.CustomStickerItem>> = repository.customStickers
 
     // Lockscreen & Floating state
     val lockscreenConfig: StateFlow<LockscreenConfig> = repository.lockscreenConfig
@@ -51,6 +57,7 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val autoUpdateRealWallpaper: StateFlow<Boolean> = repository.autoUpdateRealWallpaper
 
     val floatingReactions: StateFlow<List<FloatingHeartReaction>> = repository.floatingReactions
+    val isMyDrawingsTransparent: StateFlow<Boolean> = repository.isMyDrawingsTransparent
     val isMatched: StateFlow<Boolean> = repository.isMatched
     val connectionStatus: StateFlow<ConnectionStatus> = repository.connectionStatus
     val lastSyncError: StateFlow<String?> = syncManager.lastSyncError
@@ -58,6 +65,22 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val roomCode: StateFlow<String> = repository.roomCode
     val myName: StateFlow<String> = repository.myName
     val partnerCustomName: StateFlow<String> = repository.partnerCustomName
+
+    fun unlockPremium(unlocked: Boolean = true) {
+        repository.unlockPremium(unlocked)
+    }
+
+    fun setPartnerNotificationsEnabled(enabled: Boolean) {
+        repository.setPartnerNotificationsEnabled(enabled)
+    }
+
+    fun addCustomSticker(sticker: com.example.data.model.CustomStickerItem) {
+        repository.addCustomSticker(sticker)
+    }
+
+    fun deleteCustomSticker(id: String) {
+        repository.deleteCustomSticker(id)
+    }
 
     fun reconnectSync() {
         syncManager.reconnect()
@@ -80,6 +103,10 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
         repository.unmatchPartner()
     }
 
+    fun toggleMyDrawingsTransparency() {
+        repository.toggleMyDrawingsTransparency()
+    }
+
     fun startDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
         repository.startDrawing(normalizedX, normalizedY, pressure)
     }
@@ -94,6 +121,10 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectBrush(brushType: BrushType) {
         repository.selectBrush(brushType)
+    }
+
+    fun selectModifier(modifier: com.example.data.model.StrokeModifier) {
+        repository.selectModifier(modifier)
     }
 
     fun selectColor(color: Color) {
@@ -114,6 +145,10 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
 
     fun updateStickerPosition(stickerId: String, newX: Float, newY: Float) {
         repository.updateStickerPosition(stickerId, newX, newY)
+    }
+
+    fun moveStickerDelta(stickerId: String, deltaX: Float, deltaY: Float) {
+        repository.moveStickerDelta(stickerId, deltaX, deltaY)
     }
 
     fun updateStickerTransform(stickerId: String, scaleDelta: Float, rotationDelta: Float) {
@@ -199,6 +234,10 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     fun stopFloatingService(context: Context) {
         FloatingDrawingService.stop(context)
         repository.setFloatingServiceActive(false)
+    }
+
+    fun onAppResumed() {
+        repository.ensureActiveSync()
     }
 
     fun toggleFloatingService(context: Context) {

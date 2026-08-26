@@ -1,6 +1,11 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,27 +27,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Brush
-import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Highlight
 import androidx.compose.material.icons.filled.InvertColors
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.filled.Wallpaper
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.ScatterPlot
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,37 +57,56 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.model.BrushType
+import com.example.data.model.StrokeModifier
 
 data class BrushToolItem(
     val type: BrushType,
     val label: String,
-    val icon: ImageVector
+    val icon: ImageVector? = null,
+    val iconResId: Int? = null,
+    val isPremium: Boolean = false
 )
 
-val BRUSH_TOOLS = listOf(
-    BrushToolItem(BrushType.PEN, "Penna", Icons.Default.Edit),
-    BrushToolItem(BrushType.PENCIL, "Matita", Icons.Default.Create),
-    BrushToolItem(BrushType.HIGHLIGHTER, "Evidenziatore", Icons.Default.Highlight),
-    BrushToolItem(BrushType.NEON, "Neon Glow", Icons.Default.AutoAwesome),
-    BrushToolItem(BrushType.RAINBOW, "Arcobaleno", Icons.Default.InvertColors),
-    BrushToolItem(BrushType.DOTTED, "Puntini", Icons.Default.MoreHoriz),
-    BrushToolItem(BrushType.ERASER, "Gomma", Icons.Default.CleaningServices)
+// Primary clean base brush tools with custom eraser icon
+val PRIMARY_BRUSH_TOOLS = listOf(
+    BrushToolItem(BrushType.PEN, "Penna", icon = Icons.Default.Edit),
+    BrushToolItem(BrushType.PENCIL, "Matita", icon = Icons.Default.Create),
+    BrushToolItem(BrushType.HIGHLIGHTER, "Evidenziatore", icon = Icons.Default.Highlight),
+    BrushToolItem(BrushType.NEON, "Neon Glow", icon = Icons.Default.AutoAwesome),
+    BrushToolItem(BrushType.RAINBOW, "Arcobaleno", icon = Icons.Default.InvertColors),
+    BrushToolItem(BrushType.DOTTED, "Puntini", icon = Icons.Default.MoreHoriz),
+    BrushToolItem(BrushType.ERASER, "Gomma", iconResId = R.drawable.ic_eraser)
 )
+
+private fun getModifierIcon(modifier: StrokeModifier): ImageVector {
+    return when (modifier) {
+        StrokeModifier.NONE -> Icons.Default.Gesture
+        StrokeModifier.WAVE -> Icons.Default.Waves
+        StrokeModifier.PULSING -> Icons.Default.Favorite
+        StrokeModifier.DOT_FLOW -> Icons.Default.ScatterPlot
+    }
+}
 
 @Composable
 fun BrushPaletteBar(
     selectedBrush: BrushType,
+    selectedModifier: StrokeModifier = StrokeModifier.NONE,
     strokeWidth: Float,
     strokeAlpha: Float,
     currentColor: Color,
+    isPremiumUnlocked: Boolean = false,
     onSelectBrush: (BrushType) -> Unit,
+    onSelectModifier: (StrokeModifier) -> Unit = {},
     onSelectStrokeWidth: (Float) -> Unit,
     onSelectStrokeAlpha: (Float) -> Unit,
     onOpenStickers: () -> Unit,
+    onOpenPaywall: () -> Unit = {},
     onClearCanvas: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
@@ -92,18 +114,24 @@ fun BrushPaletteBar(
     modifier: Modifier = Modifier
 ) {
     var showSliders by remember { mutableStateOf(false) }
+    val supportedModifiers = selectedBrush.getSupportedModifiers()
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // Expandable Slider Controls for Stroke Width & Opacity
-        AnimatedVisibility(visible = showSliders) {
+        AnimatedVisibility(
+            visible = showSliders,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
             Surface(
                 color = Color(0xE6141522),
                 shape = RoundedCornerShape(24.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x40D0BCFF)),
+                border = BorderStroke(1.dp, Color(0x40D0BCFF)),
                 shadowElevation = 12.dp,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -167,182 +195,156 @@ fun BrushPaletteBar(
             }
         }
 
+        // Upper Control Bar: "Regola" button alongside the Stroke Style definition modifiers
+        Surface(
+            color = Color(0xF2161729),
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.2.dp, Color(0x44D0BCFF)),
+            shadowElevation = 10.dp,
+            modifier = Modifier
+                .padding(bottom = 6.dp)
+                .testTag("modifier_submenu_bar")
+        ) {
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // "Regola" button placed at the same level as the style definition
+                Surface(
+                    color = if (showSliders) Color(0xFF5E35B1) else Color(0x3325273C),
+                    shape = RoundedCornerShape(14.dp),
+                    border = if (showSliders) {
+                        BorderStroke(1.5.dp, Color(0xFFD0BCFF))
+                    } else {
+                        BorderStroke(1.dp, Color(0x26FFFFFF))
+                    },
+                    modifier = Modifier
+                        .clickable { showSliders = !showSliders }
+                        .testTag("toggle_sliders_btn")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Regola Tratto",
+                            tint = if (showSliders) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "Regola",
+                            fontSize = 11.sp,
+                            fontWeight = if (showSliders) FontWeight.Bold else FontWeight.Medium,
+                            color = if (showSliders) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.9f)
+                        )
+                    }
+                }
+
+                // If the active brush supports multiple modifiers, display them side-by-side
+                if (supportedModifiers.size > 1 && selectedBrush != BrushType.ERASER) {
+                    Box(
+                        modifier = Modifier
+                            .height(20.dp)
+                            .width(1.dp)
+                            .background(Color(0x33FFFFFF))
+                    )
+
+                    Text(
+                        text = "Stile:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD0BCFF),
+                        modifier = Modifier.padding(start = 2.dp, end = 2.dp)
+                    )
+
+                    supportedModifiers.forEach { mod ->
+                        val isModSelected = selectedModifier == mod
+                        val isModLocked = mod.isPremium && !isPremiumUnlocked
+
+                        Surface(
+                            color = if (isModSelected) Color(0xFF5E35B1) else Color(0x3325273C),
+                            shape = RoundedCornerShape(14.dp),
+                            border = if (isModSelected) {
+                                BorderStroke(1.5.dp, Color(0xFFD0BCFF))
+                            } else {
+                                BorderStroke(1.dp, Color(0x26FFFFFF))
+                            },
+                            modifier = Modifier
+                                .clickable {
+                                    if (isModLocked) {
+                                        onOpenPaywall()
+                                    } else {
+                                        onSelectModifier(mod)
+                                    }
+                                }
+                                .testTag("modifier_btn_${mod.name}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = getModifierIcon(mod),
+                                    contentDescription = mod.displayName,
+                                    tint = if (isModSelected) Color.White else if (isModLocked) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = mod.displayName,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isModSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isModSelected) Color.White else if (isModLocked) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.9f)
+                                )
+                                if (isModLocked) {
+                                    Surface(
+                                        color = Color(0xFFFFD54F),
+                                        shape = CircleShape,
+                                        modifier = Modifier.size(14.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Lock,
+                                                contentDescription = "VIP",
+                                                tint = Color(0xFF1A1C2E),
+                                                modifier = Modifier.size(8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Main Bottom Frosted Glass Dock Toolbar
         Surface(
             color = Color(0xE612131F),
             shape = RoundedCornerShape(32.dp),
-            border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0x38FFFFFF)),
+            border = BorderStroke(1.2.dp, Color(0x38FFFFFF)),
             shadowElevation = 14.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Brush Tools
-                BRUSH_TOOLS.forEach { tool ->
-                    val isSelected = selectedBrush == tool.type
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { onSelectBrush(tool.type) }
-                    ) {
-                        Surface(
-                            color = if (isSelected) Color(0xFF4F378B) else Color(0x2826283C),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .size(46.dp)
-                                .testTag("brush_btn_${tool.type.name}"),
-                            border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFD0BCFF)) else androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF))
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = tool.icon,
-                                    contentDescription = tool.label,
-                                    tint = if (isSelected) Color.White else Color.White.copy(alpha = 0.75f),
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = tool.label,
-                            fontSize = 9.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSelected) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.75f)
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .height(36.dp)
-                        .width(1.dp)
-                        .background(Color(0x33FFFFFF))
-                )
-
-                // Adjust Sliders toggle button
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { showSliders = !showSliders }
-                ) {
-                    Surface(
-                        color = if (showSliders) Color(0xFF4F378B) else Color(0x2826283C),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .size(46.dp)
-                            .testTag("toggle_sliders_btn"),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF))
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.Brush,
-                                contentDescription = "Tratto",
-                                tint = if (showSliders) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text("Regola", fontSize = 9.sp, color = Color.White.copy(alpha = 0.75f))
-                }
-
-                // Sticker Button
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { onOpenStickers() }
-                ) {
-                    Surface(
-                        color = Color(0x2826283C),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .size(46.dp)
-                            .testTag("open_stickers_btn"),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF))
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.EmojiEmotions,
-                                contentDescription = "Sticker",
-                                tint = Color(0xFFFEE285),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text("Sticker", fontSize = 9.sp, color = Color.White.copy(alpha = 0.75f))
-                }
-
-                Box(
-                    modifier = Modifier
-                        .height(36.dp)
-                        .width(1.dp)
-                        .background(Color(0x33FFFFFF))
-                )
-
-                // Undo
-                IconButton(
-                    onClick = onUndo,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .testTag("undo_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Undo,
-                        contentDescription = "Annulla",
-                        tint = Color.White.copy(alpha = 0.9f)
-                    )
-                }
-
-                // Redo
-                IconButton(
-                    onClick = onRedo,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .testTag("redo_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Redo,
-                        contentDescription = "Ripristina",
-                        tint = Color.White.copy(alpha = 0.9f)
-                    )
-                }
-
-                // Clear (Cancella tutto)
-                Surface(
-                    color = Color(0x40FF5252),
-                    shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x66FF5252)),
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clickable { onClearCanvas() }
-                        .testTag("clear_all_btn")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteSweep,
-                            contentDescription = "Cancella Tutto",
-                            tint = Color(0xFFFF8A80),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
+                // 1. FIXED Leftmost "Abbassa" (Minimize) button: remains sticky on the left on scroll
                 if (onMinimize != null) {
-                    Box(
-                        modifier = Modifier
-                            .height(36.dp)
-                            .width(1.dp)
-                            .background(Color(0x33FFFFFF))
-                    )
-
-                    // Minimize / Done button
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { onMinimize() }
+                        modifier = Modifier
+                            .clickable { onMinimize() }
+                            .padding(horizontal = 2.dp)
                     ) {
                         Surface(
                             color = Color(0xFF00B0FF),
@@ -350,24 +352,270 @@ fun BrushPaletteBar(
                             modifier = Modifier
                                 .size(46.dp)
                                 .testTag("minimize_palette_btn"),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0x80FFFFFF)),
+                            border = BorderStroke(1.5.dp, Color(0x80FFFFFF)),
                             shadowElevation = 4.dp
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Default.Create,
-                                    contentDescription = "Chiudi Tavolozza",
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Abbassa Tavolozza",
                                     tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Fatto",
+                            text = "Abbassa",
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF80D8FF)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    // Fixed vertical divider
+                    Box(
+                        modifier = Modifier
+                            .height(36.dp)
+                            .width(1.dp)
+                            .background(Color(0x33FFFFFF))
+                    )
+
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+
+                // 2. SCROLLABLE Tools Row
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Brush Tools (Penna, Matita, Evidenziatore, Neon, Arcobaleno, Puntini, Gomma)
+                    PRIMARY_BRUSH_TOOLS.forEach { tool ->
+                        val isSelected = selectedBrush == tool.type
+                        val isLocked = tool.isPremium && !isPremiumUnlocked
+                        val isEraser = tool.type == BrushType.ERASER
+
+                        // Styling for regular tools vs. highlighted green Gomma
+                        val buttonBg = when {
+                            isEraser && isSelected -> Color(0xFF00C853)
+                            isEraser -> Color(0x3300E676)
+                            isSelected -> Color(0xFF4F378B)
+                            else -> Color(0x2826283C)
+                        }
+                        val buttonBorder = when {
+                            isEraser && isSelected -> BorderStroke(1.8.dp, Color(0xFFB9F6CA))
+                            isEraser -> BorderStroke(1.2.dp, Color(0x6600E676))
+                            isSelected -> BorderStroke(1.5.dp, Color(0xFFD0BCFF))
+                            else -> BorderStroke(1.dp, Color(0x26FFFFFF))
+                        }
+                        val iconColor = when {
+                            isEraser && isSelected -> Color.White
+                            isEraser -> Color(0xFF69F0AE)
+                            isSelected -> Color.White
+                            isLocked -> Color(0xFFFFD54F)
+                            else -> Color.White.copy(alpha = 0.75f)
+                        }
+                        val labelColor = when {
+                            isEraser && isSelected -> Color(0xFFB9F6CA)
+                            isEraser -> Color(0xFF69F0AE)
+                            isSelected -> Color(0xFFD0BCFF)
+                            isLocked -> Color(0xFFFFD54F)
+                            else -> Color.White.copy(alpha = 0.75f)
+                        }
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.clickable {
+                                if (isLocked) {
+                                    onOpenPaywall()
+                                } else {
+                                    onSelectBrush(tool.type)
+                                }
+                            }
+                        ) {
+                            Box {
+                                Surface(
+                                    color = buttonBg,
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .testTag("brush_btn_${tool.type.name}"),
+                                    border = buttonBorder
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        if (tool.iconResId != null) {
+                                            Icon(
+                                                painter = painterResource(id = tool.iconResId),
+                                                contentDescription = tool.label,
+                                                tint = iconColor,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        } else if (tool.icon != null) {
+                                            Icon(
+                                                imageVector = tool.icon,
+                                                contentDescription = tool.label,
+                                                tint = iconColor,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // VIP Badge on top right of locked items
+                                if (isLocked) {
+                                    Surface(
+                                        color = Color(0xFFFFD54F),
+                                        shape = CircleShape,
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .align(Alignment.TopEnd)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Lock,
+                                                contentDescription = "VIP",
+                                                tint = Color(0xFF1A1C2E),
+                                                modifier = Modifier.size(10.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = tool.label,
+                                fontSize = 9.sp,
+                                fontWeight = if (isSelected || isEraser) FontWeight.Bold else FontWeight.Medium,
+                                color = labelColor
+                            )
+                        }
+                    }
+
+                    // Sticker Button
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onOpenStickers() }
+                    ) {
+                        Surface(
+                            color = Color(0x2826283C),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .size(46.dp)
+                                .testTag("open_stickers_btn"),
+                            border = BorderStroke(1.dp, Color(0x26FFFFFF))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.EmojiEmotions,
+                                    contentDescription = "Sticker",
+                                    tint = Color(0xFFFEE285),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("Sticker", fontSize = 9.sp, color = Color.White.copy(alpha = 0.75f))
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .height(36.dp)
+                            .width(1.dp)
+                            .background(Color(0x33FFFFFF))
+                    )
+
+                    // Undo (Annulla)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onUndo() }
+                    ) {
+                        Surface(
+                            color = Color(0x2826283C),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .size(46.dp)
+                                .testTag("undo_btn"),
+                            border = BorderStroke(1.dp, Color(0x26FFFFFF))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Undo,
+                                    contentDescription = "Annulla",
+                                    tint = Color.White.copy(alpha = 0.9f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Annulla",
+                            fontSize = 9.sp,
+                            color = Color.White.copy(alpha = 0.75f)
+                        )
+                    }
+
+                    // Redo (Ripristina)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onRedo() }
+                    ) {
+                        Surface(
+                            color = Color(0x2826283C),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .size(46.dp)
+                                .testTag("redo_btn"),
+                            border = BorderStroke(1.dp, Color(0x26FFFFFF))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Redo,
+                                    contentDescription = "Ripristina",
+                                    tint = Color.White.copy(alpha = 0.9f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Ripristina",
+                            fontSize = 9.sp,
+                            color = Color.White.copy(alpha = 0.75f)
+                        )
+                    }
+
+                    // Clear (Cancella tutto)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onClearCanvas() }
+                    ) {
+                        Surface(
+                            color = Color(0x40FF5252),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, Color(0x66FF5252)),
+                            modifier = Modifier
+                                .size(46.dp)
+                                .testTag("clear_all_btn")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = "Cancella Tutto",
+                                    tint = Color(0xFFFF8A80),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Cancella",
+                            fontSize = 9.sp,
+                            color = Color(0xFFFF8A80)
                         )
                     }
                 }

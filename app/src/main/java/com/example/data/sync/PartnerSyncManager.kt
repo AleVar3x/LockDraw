@@ -30,7 +30,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Collections
 import java.util.Date
+import java.util.LinkedHashSet
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
@@ -112,15 +114,31 @@ class PartnerSyncManager(
     )
     val incomingActions: SharedFlow<SyncAction> = _incomingActions.asSharedFlow()
 
-    // Deduplication of received action IDs
-    private val processedActionIds = ConcurrentHashMap.newKeySet<String>()
+    // Deduplication of received action IDs (bounded to prevent memory bloat over long sessions)
+    private val processedActionIds = Collections.synchronizedSet(LinkedHashSet<String>())
+    private var lastSnapshotTimestamp: Long = System.currentTimeMillis()
 
     private var firestoreListener: ListenerRegistration? = null
+    private var watchdogJob: Job? = null
     private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
     private var simulationJob: Job? = null
     private var draftThrottleJob: Job? = null
     private var pendingDraftAction: SyncAction? = null
+
+    private fun recordProcessedAction(actionId: String): Boolean {
+        synchronized(processedActionIds) {
+            if (processedActionIds.contains(actionId)) return false
+            if (processedActionIds.size > 150) {
+                val oldest = processedActionIds.firstOrNull()
+                if (oldest != null) {
+                    processedActionIds.remove(oldest)
+                }
+            }
+            processedActionIds.add(actionId)
+            return true
+        }
+    }
 
     private val _lastSyncError = MutableStateFlow<String?>(null)
     val lastSyncError: StateFlow<String?> = _lastSyncError.asStateFlow()
@@ -199,6 +217,7 @@ class PartnerSyncManager(
 
         startFirestoreListener(cleanCode)
         startHeartbeat()
+        startWatchdog()
 
         // Broadcast join event to the room
         scope.launch(Dispatchers.IO) {
@@ -238,6 +257,64 @@ class PartnerSyncManager(
         connectToRoom(code, markAsMatched = _isMatched.value)
     }
 
+    /**
+     * Proactively verifies that the Firestore listener and gRPC socket are alive.
+     * Called when the app resumes, on user interaction, or by the background watchdog.
+     */
+    fun ensureActiveConnection(forceRefresh: Boolean = false) {
+        val roomCode = _currentRoomCode.value
+        val now = System.currentTimeMillis()
+        val isStale = (now - lastSnapshotTimestamp) > 30_000
+
+        if (firestoreListener == null || forceRefresh || isStale) {
+            val db = firestore ?: return
+            val docRef = db.collection("rooms").document(roomCode)
+            docRef.get().addOnSuccessListener { snapshot ->
+                if (snapshot != null && snapshot.exists()) {
+                    lastSnapshotTimestamp = System.currentTimeMillis()
+                    _connectionStatus.value = ConnectionStatus.CONNECTED
+                    handleDocumentSnapshot(snapshot)
+                }
+            }.addOnFailureListener { e ->
+                Log.w("PartnerSync", "ensureActiveConnection probe failed, triggering reconnect: ${e.message}")
+                scheduleListenerReconnect(roomCode)
+            }
+
+            if (firestoreListener == null) {
+                startFirestoreListener(roomCode)
+            }
+        }
+    }
+
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(25_000)
+                val now = System.currentTimeMillis()
+                val elapsedSinceLastSnapshot = now - lastSnapshotTimestamp
+                val roomCode = _currentRoomCode.value
+
+                // If no updates received for >45s or listener was dropped, probe Firestore directly
+                if (elapsedSinceLastSnapshot > 45_000 || firestoreListener == null) {
+                    val db = firestore ?: continue
+                    val docRef = db.collection("rooms").document(roomCode)
+                    docRef.get().addOnSuccessListener { snapshot ->
+                        if (snapshot != null && snapshot.exists()) {
+                            lastSnapshotTimestamp = System.currentTimeMillis()
+                            _connectionStatus.value = ConnectionStatus.CONNECTED
+                            handleDocumentSnapshot(snapshot)
+                        }
+                    }.addOnFailureListener { e ->
+                        Log.w("PartnerSync", "Watchdog probe failed: ${e.message}. Re-establishing stream...")
+                        disconnectFirestore()
+                        startFirestoreListener(roomCode)
+                    }
+                }
+            }
+        }
+    }
+
     private fun startFirestoreListener(roomCode: String) {
         val db = firestore
         if (db == null) {
@@ -249,6 +326,17 @@ class PartnerSyncManager(
 
         try {
             val docRef = db.collection("rooms").document(roomCode)
+
+            // 1. Instant one-shot query to sync immediately without waiting for listener attachment delay
+            docRef.get().addOnSuccessListener { snapshot ->
+                if (snapshot != null && snapshot.exists()) {
+                    lastSnapshotTimestamp = System.currentTimeMillis()
+                    _connectionStatus.value = ConnectionStatus.CONNECTED
+                    handleDocumentSnapshot(snapshot)
+                }
+            }
+
+            // 2. Realtime continuous stream listener
             firestoreListener = docRef.addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     val errMsg = error.message ?: error.code.name
@@ -263,10 +351,12 @@ class PartnerSyncManager(
                 reconnectJob?.cancel()
 
                 if (snapshot != null && snapshot.exists()) {
+                    lastSnapshotTimestamp = System.currentTimeMillis()
                     _connectionStatus.value = ConnectionStatus.CONNECTED
                     handleDocumentSnapshot(snapshot)
                 } else if (snapshot != null && !snapshot.exists()) {
                     // Initialize empty room doc
+                    lastSnapshotTimestamp = System.currentTimeMillis()
                     _connectionStatus.value = ConnectionStatus.CONNECTED
                     initEmptyRoom(docRef)
                 }
@@ -282,7 +372,7 @@ class PartnerSyncManager(
     private fun scheduleListenerReconnect(roomCode: String) {
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch(Dispatchers.IO) {
-            delay(4000)
+            delay(3500)
             if (isActive && _currentRoomCode.value == roomCode) {
                 Log.i("PartnerSync", "Attempting automatic reconnection to room: $roomCode")
                 disconnectFirestore()
@@ -413,7 +503,7 @@ class PartnerSyncManager(
             val actionSender = snapshot.getString("last_action_sender")
             val actionJson = snapshot.getString("last_action_json")
 
-            if (!actionId.isNullOrBlank() && actionSender != myDeviceId && processedActionIds.add(actionId)) {
+            if (!actionId.isNullOrBlank() && actionSender != myDeviceId && recordProcessedAction(actionId)) {
                 if (!actionJson.isNullOrBlank()) {
                     val action = SyncActionSerializer.fromJson(actionJson)
                     if (action != null) {
@@ -479,6 +569,7 @@ class PartnerSyncManager(
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val pts = parsePoints(obj)
+                val mod = try { com.example.data.model.StrokeModifier.valueOf(obj.optString("modifier", "NONE")) } catch (e: Exception) { com.example.data.model.StrokeModifier.NONE }
                 strokes.add(
                     DrawingStroke(
                         id = obj.getString("strokeId"),
@@ -487,7 +578,8 @@ class PartnerSyncManager(
                         strokeWidth = obj.getDouble("strokeWidth").toFloat(),
                         brushType = try { BrushType.valueOf(obj.optString("brushType", "PEN")) } catch (e: Exception) { BrushType.PEN },
                         authorId = obj.optString("authorId", "partner"),
-                        alpha = obj.optDouble("alpha", 1.0).toFloat()
+                        alpha = obj.optDouble("alpha", 1.0).toFloat(),
+                        modifier = mod
                     )
                 )
             }
@@ -620,7 +712,7 @@ class PartnerSyncManager(
         val db = firestore ?: return
         val roomCode = _currentRoomCode.value
         val actionId = UUID.randomUUID().toString()
-        processedActionIds.add(actionId)
+        recordProcessedAction(actionId)
         val now = System.currentTimeMillis()
 
         when (action) {
@@ -671,6 +763,7 @@ class PartnerSyncManager(
                         )
                     } catch (e: Exception) {
                         Log.e("PartnerSync", "Error updating finished stroke on Firestore", e)
+                        scheduleListenerReconnect(roomCode)
                     }
                 }
             }
@@ -719,11 +812,13 @@ class PartnerSyncManager(
                             "updatedAt" to now,
                             "expiresAt" to (now + TWO_WEEKS_MILLIS),
                             "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
-                            "draft_json" to FieldValue.delete()
+                            "draft_json" to FieldValue.delete(),
+                            "draft_sender" to FieldValue.delete()
                         )
                         db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
                     } catch (e: Exception) {
                         Log.e("PartnerSync", "Error setting full snapshot on Firestore", e)
+                        scheduleListenerReconnect(roomCode)
                     }
                 }
             }
@@ -740,11 +835,13 @@ class PartnerSyncManager(
                             "updatedAt" to now,
                             "expiresAt" to (now + TWO_WEEKS_MILLIS),
                             "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
-                            "draft_json" to FieldValue.delete()
+                            "draft_json" to FieldValue.delete(),
+                            "draft_sender" to FieldValue.delete()
                         )
                         db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
                     } catch (e: Exception) {
                         Log.e("PartnerSync", "Error clearing canvas on Firestore", e)
+                        scheduleListenerReconnect(roomCode)
                     }
                 }
             }
@@ -769,6 +866,87 @@ class PartnerSyncManager(
                         Log.e("PartnerSync", "Error broadcasting action to Firestore", e)
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Unified single atomic write for finishing a stroke and saving canvas snapshot.
+     * Prevents document write race conditions and halves cloud database requests.
+     */
+    fun broadcastCanvasChange(
+        finishedStroke: DrawingStroke? = null,
+        allStrokes: List<DrawingStroke>,
+        allStickers: List<PlacedSticker>,
+        wallpaperTheme: WallpaperTheme
+    ) {
+        val db = firestore ?: return
+        val roomCode = _currentRoomCode.value
+        val actionId = UUID.randomUUID().toString()
+        recordProcessedAction(actionId)
+        val now = System.currentTimeMillis()
+
+        draftThrottleJob?.cancel()
+        pendingDraftAction = null
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val strokesArr = JSONArray()
+                allStrokes.forEach { s ->
+                    val sObj = JSONObject()
+                    sObj.put("strokeId", s.id)
+                    sObj.put("colorArgb", s.colorArgb)
+                    sObj.put("strokeWidth", s.strokeWidth.toDouble())
+                    sObj.put("brushType", s.brushType.name)
+                    sObj.put("alpha", s.alpha.toDouble())
+                    sObj.put("authorId", s.authorId)
+                    val sb = StringBuilder()
+                    s.points.forEachIndexed { idx, p ->
+                        if (idx > 0) sb.append(';')
+                        val ix = (p.x * 1000).toInt()
+                        val iy = (p.y * 1000).toInt()
+                        val ip = (p.pressure * 100).toInt()
+                        sb.append(ix).append(',').append(iy).append(',').append(ip)
+                    }
+                    sObj.put("pts", sb.toString())
+                    strokesArr.put(sObj)
+                }
+
+                val stArr = JSONArray()
+                allStickers.forEach { st ->
+                    val stObj = JSONObject()
+                    stObj.put("id", st.id)
+                    stObj.put("content", st.content)
+                    stObj.put("x", st.x.toDouble())
+                    stObj.put("y", st.y.toDouble())
+                    stObj.put("scale", st.scale.toDouble())
+                    stObj.put("rotation", st.rotation.toDouble())
+                    stObj.put("authorId", st.authorId)
+                    stArr.put(stObj)
+                }
+
+                val updates = hashMapOf<String, Any>(
+                    "strokes_json" to strokesArr.toString(),
+                    "stickers_json" to stArr.toString(),
+                    "wallpaperTheme" to wallpaperTheme.name,
+                    "updated_by" to myDeviceId,
+                    "updatedAt" to now,
+                    "expiresAt" to (now + TWO_WEEKS_MILLIS),
+                    "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
+                    "draft_json" to FieldValue.delete(),
+                    "draft_sender" to FieldValue.delete()
+                )
+
+                if (finishedStroke != null) {
+                    updates["last_action_id"] = actionId
+                    updates["last_action_sender"] = myDeviceId
+                    updates["last_action_json"] = SyncActionSerializer.toJson(SyncAction.StrokeFinished(finishedStroke))
+                }
+
+                db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
+            } catch (e: Exception) {
+                Log.e("PartnerSync", "Error broadcasting canvas change to Firestore", e)
+                scheduleListenerReconnect(roomCode)
             }
         }
     }
@@ -902,6 +1080,8 @@ class PartnerSyncManager(
 
     private fun disconnectFirestore() {
         try {
+            watchdogJob?.cancel()
+            watchdogJob = null
             reconnectJob?.cancel()
             reconnectJob = null
             firestoreListener?.remove()
@@ -912,6 +1092,7 @@ class PartnerSyncManager(
     }
 
     fun cleanup() {
+        watchdogJob?.cancel()
         simulationJob?.cancel()
         heartbeatJob?.cancel()
         draftThrottleJob?.cancel()

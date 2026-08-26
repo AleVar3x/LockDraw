@@ -22,7 +22,8 @@ data class SavedStrokeEntity(
     val brushTypeName: String,
     val alpha: Float,
     val authorId: String,
-    val orderIndex: Long
+    val orderIndex: Long,
+    val modifierName: String = "NONE"
 )
 
 @Entity(tableName = "saved_stickers")

@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.example.data.local.DrawingDatabase
@@ -10,6 +11,7 @@ import com.example.data.local.DrawingSessionEntity
 import com.example.data.local.SavedStickerEntity
 import com.example.data.local.SavedStrokeEntity
 import com.example.data.model.BrushType
+import com.example.data.model.CustomStickerItem
 import com.example.data.model.DrawingPoint
 import com.example.data.model.DrawingStroke
 import com.example.data.model.LockscreenConfig
@@ -19,12 +21,15 @@ import com.example.data.sync.ConnectionStatus
 import com.example.data.sync.PartnerPresence
 import com.example.data.sync.PartnerSyncManager
 import com.example.data.sync.SyncAction
+import com.example.util.NotificationHelper
 import com.example.util.WallpaperHelper
 import com.example.util.WallpaperTarget
 import com.example.widget.PartnerDrawingWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -81,6 +86,9 @@ class DrawingRepository private constructor(private val application: Application
     private val _selectedBrushType = MutableStateFlow(BrushType.PEN)
     val selectedBrushType: StateFlow<BrushType> = _selectedBrushType.asStateFlow()
 
+    private val _selectedModifier = MutableStateFlow(com.example.data.model.StrokeModifier.NONE)
+    val selectedModifier: StateFlow<com.example.data.model.StrokeModifier> = _selectedModifier.asStateFlow()
+
     private val _selectedColor = MutableStateFlow(Color(0xFFD0BCFF))
     val selectedColor: StateFlow<Color> = _selectedColor.asStateFlow()
 
@@ -89,6 +97,18 @@ class DrawingRepository private constructor(private val application: Application
 
     private val _strokeAlpha = MutableStateFlow(1.0f)
     val strokeAlpha: StateFlow<Float> = _strokeAlpha.asStateFlow()
+
+    // Premium & Paywall state (4.99€ VIP)
+    private val _isPremiumUnlocked = MutableStateFlow(prefs.getBoolean("is_premium_unlocked", false))
+    val isPremiumUnlocked: StateFlow<Boolean> = _isPremiumUnlocked.asStateFlow()
+
+    // Partner Drawing Notifications state
+    private val _partnerNotificationsEnabled = MutableStateFlow(prefs.getBoolean("partner_notifications_enabled", true))
+    val partnerNotificationsEnabled: StateFlow<Boolean> = _partnerNotificationsEnabled.asStateFlow()
+
+    // WhatsApp-style Custom Stickers state
+    private val _customStickers = MutableStateFlow<List<CustomStickerItem>>(emptyList())
+    val customStickers: StateFlow<List<CustomStickerItem>> = _customStickers.asStateFlow()
 
     // Lockscreen styling state
     private val _lockscreenConfig = MutableStateFlow(LockscreenConfig(wallpaperTheme = WallpaperTheme.FROSTED_GLASS))
@@ -111,6 +131,18 @@ class DrawingRepository private constructor(private val application: Application
     private val _floatingReactions = MutableStateFlow<List<FloatingHeartReaction>>(emptyList())
     val floatingReactions: StateFlow<List<FloatingHeartReaction>> = _floatingReactions.asStateFlow()
 
+    // My Drawings 20% Transparency Switch (ghost mode to use phone without deleting draft before partner sees)
+    private val _isMyDrawingsTransparent = MutableStateFlow(false)
+    val isMyDrawingsTransparent: StateFlow<Boolean> = _isMyDrawingsTransparent.asStateFlow()
+
+    fun toggleMyDrawingsTransparency() {
+        _isMyDrawingsTransparent.value = !_isMyDrawingsTransparent.value
+    }
+
+    fun setMyDrawingsTransparency(enabled: Boolean) {
+        _isMyDrawingsTransparent.value = enabled
+    }
+
     val isMatched: StateFlow<Boolean> = syncManager.isMatched
     val connectionStatus: StateFlow<ConnectionStatus> = syncManager.connectionStatus
     val partnerPresence: StateFlow<PartnerPresence> = syncManager.partnerPresence
@@ -126,7 +158,90 @@ class DrawingRepository private constructor(private val application: Application
         syncManager.setPartnerCustomName(name)
     }
 
+    fun unlockPremium(unlocked: Boolean = true) {
+        _isPremiumUnlocked.value = unlocked
+        prefs.edit().putBoolean("is_premium_unlocked", unlocked).apply()
+    }
+
+    fun setPartnerNotificationsEnabled(enabled: Boolean) {
+        _partnerNotificationsEnabled.value = enabled
+        prefs.edit().putBoolean("partner_notifications_enabled", enabled).apply()
+    }
+
+    fun addCustomSticker(sticker: CustomStickerItem) {
+        val updated = listOf(sticker) + _customStickers.value.filter { it.id != sticker.id }
+        _customStickers.value = updated
+        saveCustomStickersToPrefs(updated)
+    }
+
+    fun deleteCustomSticker(id: String) {
+        val updated = _customStickers.value.filter { it.id != id }
+        _customStickers.value = updated
+        saveCustomStickersToPrefs(updated)
+    }
+
+    private fun loadCustomStickersFromPrefs(): List<CustomStickerItem> {
+        val raw = prefs.getString("custom_stickers_json", null) ?: return defaultCustomStickers()
+        return try {
+            val arr = JSONArray(raw)
+            val list = mutableListOf<CustomStickerItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    CustomStickerItem(
+                        id = obj.getString("id"),
+                        title = obj.getString("title"),
+                        emoji = obj.optString("emoji", "✨"),
+                        backgroundColorArgb = obj.optLong("backgroundColorArgb", 0xFF4F378B),
+                        textColorArgb = obj.optLong("textColorArgb", 0xFFFFFFFF),
+                        isDoodle = obj.optBoolean("isDoodle", false),
+                        doodlePoints = obj.optString("doodlePoints", null),
+                        imageUri = obj.optString("imageUri", null).takeIf { !it.isNullOrBlank() },
+                        imageBase64 = obj.optString("imageBase64", null).takeIf { !it.isNullOrBlank() },
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+            if (list.isEmpty()) defaultCustomStickers() else list
+        } catch (e: Exception) {
+            defaultCustomStickers()
+        }
+    }
+
+    private fun saveCustomStickersToPrefs(list: List<CustomStickerItem>) {
+        try {
+            val arr = JSONArray()
+            for (item in list) {
+                val obj = JSONObject().apply {
+                    put("id", item.id)
+                    put("title", item.title)
+                    put("emoji", item.emoji)
+                    put("backgroundColorArgb", item.backgroundColorArgb)
+                    put("textColorArgb", item.textColorArgb)
+                    put("isDoodle", item.isDoodle)
+                    put("doodlePoints", item.doodlePoints ?: "")
+                    put("imageUri", item.imageUri ?: "")
+                    put("imageBase64", item.imageBase64 ?: "")
+                    put("createdAt", item.createdAt)
+                }
+                arr.put(obj)
+            }
+            prefs.edit().putString("custom_stickers_json", arr.toString()).apply()
+        } catch (e: Exception) {
+            Log.e("DrawingRepository", "Error saving custom stickers", e)
+        }
+    }
+
+    private fun defaultCustomStickers(): List<CustomStickerItem> {
+        return listOf(
+            CustomStickerItem(title = "Sei il mio cuore ❤️", emoji = "💖", backgroundColorArgb = 0xFFDD2476, textColorArgb = 0xFFFFFFFF),
+            CustomStickerItem(title = "Ti penso tantissimo ✨", emoji = "🥺", backgroundColorArgb = 0xFF302B63, textColorArgb = 0xFFFFFFFF),
+            CustomStickerItem(title = "Bacio della buonanotte 🌙", emoji = "💋", backgroundColorArgb = 0xFF1A1C2E, textColorArgb = 0xFFFFD54F)
+        )
+    }
+
     init {
+        _customStickers.value = loadCustomStickersFromPrefs()
         listenToIncomingSyncActions()
         loadPersistedSession(syncManager.currentRoomCode.value)
     }
@@ -183,13 +298,13 @@ class DrawingRepository private constructor(private val application: Application
                             }
                         }
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing()
+                        handlePartnerUpdatedDrawing("ha appena disegnato sulla tua schermata! 🎨")
                     }
                     is SyncAction.PlaceSticker -> {
                         if (_placedStickers.value.none { it.id == action.sticker.id }) {
                             _placedStickers.value = _placedStickers.value + action.sticker
                             persistCurrentState()
-                            handlePartnerUpdatedDrawing()
+                            handlePartnerUpdatedDrawing("ha aggiunto un nuovo sticker sulla tela! ✨")
                         }
                     }
                     is SyncAction.UpdateSticker -> {
@@ -197,7 +312,7 @@ class DrawingRepository private constructor(private val application: Application
                             if (it.id == action.sticker.id) action.sticker else it
                         }
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing()
+                        handlePartnerUpdatedDrawing("ha spostato uno sticker sulla tela!")
                     }
                     is SyncAction.RemoveSticker -> {
                         _placedStickers.value = _placedStickers.value.filter { it.id != action.stickerId }
@@ -210,7 +325,7 @@ class DrawingRepository private constructor(private val application: Application
                         _placedStickers.value = emptyList()
                         _partnerDraftStroke.value = null
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing()
+                        handlePartnerUpdatedDrawing("ha pulito la tela per un nuovo disegno insieme 🧼")
                     }
                     is SyncAction.Undo -> {
                         if (_strokes.value.isNotEmpty()) {
@@ -238,7 +353,7 @@ class DrawingRepository private constructor(private val application: Application
                             customWallpaperUri = action.customUri
                         )
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing()
+                        handlePartnerUpdatedDrawing("ha cambiato il tema dello sfondo! 🖼️")
                     }
                     is SyncAction.RequestSnapshot -> {
                         // Partner just joined and requested current canvas state
@@ -259,7 +374,7 @@ class DrawingRepository private constructor(private val application: Application
                         _placedStickers.value = action.stickers
                         _lockscreenConfig.value = _lockscreenConfig.value.copy(wallpaperTheme = action.wallpaperTheme)
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing()
+                        handlePartnerUpdatedDrawing("ha aggiornato la tela condivisa! 💖")
                     }
                     else -> {}
                 }
@@ -267,11 +382,32 @@ class DrawingRepository private constructor(private val application: Application
         }
     }
 
-    private fun handlePartnerUpdatedDrawing() {
+    private var lastDrawingNotifiedTime: Long = 0L
+
+    private fun handlePartnerUpdatedDrawing(detail: String? = null) {
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
+
+        if (detail != null && _partnerNotificationsEnabled.value) {
+            val now = System.currentTimeMillis()
+            if (now - lastDrawingNotifiedTime > 12_000L) { // Throttle at 12s interval
+                lastDrawingNotifiedTime = now
+                val resolvedPartnerName = syncManager.partnerPresence.value.partnerName.ifBlank { "Il tuo partner" }
+                NotificationHelper.showPartnerDrawingNotification(
+                    context = application,
+                    partnerName = resolvedPartnerName,
+                    roomCode = syncManager.currentRoomCode.value,
+                    detailText = detail
+                )
+            }
+        }
+    }
+
+    fun ensureActiveSync() {
+        syncManager.ensureActiveConnection()
     }
 
     fun startDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
+        syncManager.ensureActiveConnection()
         saveSnapshotForUndo()
         val startPoint = DrawingPoint(normalizedX, normalizedY, pressure)
         val stroke = DrawingStroke(
@@ -281,7 +417,8 @@ class DrawingRepository private constructor(private val application: Application
             strokeWidth = _strokeWidth.value,
             brushType = _selectedBrushType.value,
             authorId = syncManager.myDeviceId,
-            alpha = _strokeAlpha.value
+            alpha = _strokeAlpha.value,
+            modifier = _selectedModifier.value
         )
         _currentDraftStroke.value = stroke
 
@@ -298,7 +435,8 @@ class DrawingRepository private constructor(private val application: Application
                 strokeWidth = stroke.strokeWidth,
                 brushType = stroke.brushType,
                 alpha = stroke.alpha,
-                authorId = syncManager.myDeviceId
+                authorId = syncManager.myDeviceId,
+                modifier = stroke.modifier
             )
         )
     }
@@ -343,14 +481,11 @@ class DrawingRepository private constructor(private val application: Application
         }
         _currentDraftStroke.value = null
 
-        syncManager.broadcastAction(SyncAction.StrokeFinished(finalStroke))
-        syncManager.broadcastAction(
-            SyncAction.FullSnapshot(
-                strokes = _strokes.value,
-                stickers = _placedStickers.value,
-                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                authorId = syncManager.myDeviceId
-            )
+        syncManager.broadcastCanvasChange(
+            finishedStroke = finalStroke,
+            allStrokes = _strokes.value,
+            allStickers = _placedStickers.value,
+            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
         )
         redoHistory.clear()
         persistCurrentState()
@@ -422,6 +557,14 @@ class DrawingRepository private constructor(private val application: Application
 
     fun selectBrush(brushType: BrushType) {
         _selectedBrushType.value = brushType
+        val supported = brushType.getSupportedModifiers()
+        if (_selectedModifier.value !in supported) {
+            _selectedModifier.value = com.example.data.model.StrokeModifier.NONE
+        }
+    }
+
+    fun selectModifier(modifier: com.example.data.model.StrokeModifier) {
+        _selectedModifier.value = modifier
     }
 
     fun selectColor(color: Color) {
@@ -450,35 +593,52 @@ class DrawingRepository private constructor(private val application: Application
         _placedStickers.value = _placedStickers.value + sticker
         _selectedStickerId.value = sticker.id
 
-        syncManager.broadcastAction(SyncAction.PlaceSticker(sticker))
-        syncManager.broadcastAction(
-            SyncAction.FullSnapshot(
-                strokes = _strokes.value,
-                stickers = _placedStickers.value,
-                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                authorId = syncManager.myDeviceId
-            )
+        syncManager.broadcastCanvasChange(
+            finishedStroke = null,
+            allStrokes = _strokes.value,
+            allStickers = _placedStickers.value,
+            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
         )
         persistCurrentState()
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
     }
 
-    fun updateStickerPosition(stickerId: String, newX: Float, newY: Float) {
+    private var stickerSyncJob: Job? = null
+
+    private fun scheduleStickerSync() {
+        stickerSyncJob?.cancel()
+        stickerSyncJob = scope.launch {
+            delay(150)
+            syncManager.broadcastCanvasChange(
+                finishedStroke = null,
+                allStrokes = _strokes.value,
+                allStickers = _placedStickers.value,
+                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
+            )
+            persistCurrentState()
+            PartnerDrawingWidgetProvider.updateAllWidgets(application)
+        }
+    }
+
+    fun moveStickerDelta(stickerId: String, deltaX: Float, deltaY: Float) {
         val updated = _placedStickers.value.map { st ->
-            if (st.id == stickerId) st.copy(x = newX.coerceIn(0.05f, 0.95f), y = newY.coerceIn(0.05f, 0.95f)) else st
+            if (st.id == stickerId) {
+                st.copy(
+                    x = (st.x + deltaX).coerceIn(0.04f, 0.96f),
+                    y = (st.y + deltaY).coerceIn(0.04f, 0.96f)
+                )
+            } else st
         }
         _placedStickers.value = updated
-        updated.find { it.id == stickerId }?.let {
-            syncManager.broadcastAction(SyncAction.UpdateSticker(it))
-            syncManager.broadcastAction(
-                SyncAction.FullSnapshot(
-                    strokes = _strokes.value,
-                    stickers = _placedStickers.value,
-                    wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                    authorId = syncManager.myDeviceId
-                )
-            )
+        scheduleStickerSync()
+    }
+
+    fun updateStickerPosition(stickerId: String, newX: Float, newY: Float) {
+        val updated = _placedStickers.value.map { st ->
+            if (st.id == stickerId) st.copy(x = newX.coerceIn(0.04f, 0.96f), y = newY.coerceIn(0.04f, 0.96f)) else st
         }
+        _placedStickers.value = updated
+        scheduleStickerSync()
     }
 
     fun updateStickerTransform(stickerId: String, scaleDelta: Float, rotationDelta: Float) {
@@ -491,17 +651,7 @@ class DrawingRepository private constructor(private val application: Application
             } else st
         }
         _placedStickers.value = updated
-        updated.find { it.id == stickerId }?.let {
-            syncManager.broadcastAction(SyncAction.UpdateSticker(it))
-            syncManager.broadcastAction(
-                SyncAction.FullSnapshot(
-                    strokes = _strokes.value,
-                    stickers = _placedStickers.value,
-                    wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                    authorId = syncManager.myDeviceId
-                )
-            )
-        }
+        scheduleStickerSync()
     }
 
     fun selectSticker(id: String?) {
@@ -512,14 +662,11 @@ class DrawingRepository private constructor(private val application: Application
         saveSnapshotForUndo()
         _placedStickers.value = _placedStickers.value.filter { it.id != id }
         if (_selectedStickerId.value == id) _selectedStickerId.value = null
-        syncManager.broadcastAction(SyncAction.RemoveSticker(id, syncManager.myDeviceId))
-        syncManager.broadcastAction(
-            SyncAction.FullSnapshot(
-                strokes = _strokes.value,
-                stickers = _placedStickers.value,
-                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                authorId = syncManager.myDeviceId
-            )
+        syncManager.broadcastCanvasChange(
+            finishedStroke = null,
+            allStrokes = _strokes.value,
+            allStickers = _placedStickers.value,
+            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
         )
         persistCurrentState()
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
@@ -542,14 +689,11 @@ class DrawingRepository private constructor(private val application: Application
             redoHistory.add(CanvasSnapshot(_strokes.value, _placedStickers.value))
             _strokes.value = lastState.strokes
             _placedStickers.value = lastState.stickers
-            syncManager.broadcastAction(SyncAction.Undo(syncManager.myDeviceId))
-            syncManager.broadcastAction(
-                SyncAction.FullSnapshot(
-                    strokes = _strokes.value,
-                    stickers = _placedStickers.value,
-                    wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                    authorId = syncManager.myDeviceId
-                )
+            syncManager.broadcastCanvasChange(
+                finishedStroke = null,
+                allStrokes = _strokes.value,
+                allStickers = _placedStickers.value,
+                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
             )
             persistCurrentState()
             PartnerDrawingWidgetProvider.updateAllWidgets(application)
@@ -560,14 +704,11 @@ class DrawingRepository private constructor(private val application: Application
             } else if (_placedStickers.value.isNotEmpty()) {
                 _placedStickers.value = _placedStickers.value.dropLast(1)
             }
-            syncManager.broadcastAction(SyncAction.Undo(syncManager.myDeviceId))
-            syncManager.broadcastAction(
-                SyncAction.FullSnapshot(
-                    strokes = _strokes.value,
-                    stickers = _placedStickers.value,
-                    wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                    authorId = syncManager.myDeviceId
-                )
+            syncManager.broadcastCanvasChange(
+                finishedStroke = null,
+                allStrokes = _strokes.value,
+                allStickers = _placedStickers.value,
+                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
             )
             persistCurrentState()
             PartnerDrawingWidgetProvider.updateAllWidgets(application)
@@ -705,7 +846,8 @@ class DrawingRepository private constructor(private val application: Application
                         brushTypeName = s.brushType.name,
                         alpha = s.alpha,
                         authorId = s.authorId,
-                        orderIndex = idx.toLong()
+                        orderIndex = idx.toLong(),
+                        modifierName = s.modifier.name
                     )
                 }
 
@@ -770,7 +912,8 @@ class DrawingRepository private constructor(private val application: Application
                             strokeWidth = ent.strokeWidth,
                             brushType = try { BrushType.valueOf(ent.brushTypeName) } catch (e: Exception) { BrushType.PEN },
                             authorId = ent.authorId,
-                            alpha = ent.alpha
+                            alpha = ent.alpha,
+                            modifier = try { com.example.data.model.StrokeModifier.valueOf(ent.modifierName) } catch (e: Exception) { com.example.data.model.StrokeModifier.NONE }
                         )
                     }
 

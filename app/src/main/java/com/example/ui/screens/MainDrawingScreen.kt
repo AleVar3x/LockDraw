@@ -92,6 +92,12 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.BrushType
 import com.example.data.model.WallpaperTheme
 import com.example.data.sync.ConnectionStatus
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import com.example.ui.components.PaywallDialog
 import com.example.ui.components.DrawingCanvas
 import com.example.util.QrCodeView
 import com.example.viewmodel.DrawingViewModel
@@ -124,6 +130,9 @@ fun MainDrawingScreen(
     val isFloatingActive by viewModel.isFloatingServiceActive.collectAsState()
     val lockscreenConfig by viewModel.lockscreenConfig.collectAsState()
 
+    val isPremiumUnlocked by viewModel.isPremiumUnlocked.collectAsState()
+    val partnerNotificationsEnabled by viewModel.partnerNotificationsEnabled.collectAsState()
+
     val selectedBrushType by viewModel.selectedBrushType.collectAsState()
     val selectedColor by viewModel.selectedColor.collectAsState()
     val strokeWidth by viewModel.strokeWidth.collectAsState()
@@ -133,6 +142,7 @@ fun MainDrawingScreen(
     var partnerNameInput by remember(partnerCustomName) { mutableStateOf(partnerCustomName) }
     var showQrDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
+    var showPaywallDialog by remember { mutableStateOf(false) }
     var hasOverlayPermission by remember { mutableStateOf(viewModel.canDrawOverlays(context)) }
 
     val drawingColors = remember {
@@ -1038,6 +1048,176 @@ fun MainDrawingScreen(
                 }
             }
 
+            // 5. IMPOSTAZIONI VIP & NOTIFICHE PARTNER
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isPremiumUnlocked) Color(0xD91E1B38) else Color(0xD92A1D28)
+                ),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(
+                    1.2.dp,
+                    if (isPremiumUnlocked) Color(0x66FFD54F) else Color(0x66FF2A6D)
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("vip_settings_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = if (isPremiumUnlocked) Color(0xFFFFD54F) else Color(0xFFFF2A6D),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.WorkspacePremium,
+                                        contentDescription = null,
+                                        tint = if (isPremiumUnlocked) Color(0xFF141324) else Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (isPremiumUnlocked) "LockDraw VIP (Attivo)" else "LockDraw VIP (4,99 €)",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    text = if (isPremiumUnlocked) "Tutti i pennelli e sticker sbloccati a vita" else "Sblocca pennelli avanzati e sticker personalizzati",
+                                    color = if (isPremiumUnlocked) Color(0xFFFFD54F) else Color(0xFFD0BCFF),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    if (!isPremiumUnlocked) {
+                        Surface(
+                            color = Color(0x28FF2A6D),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0x40FF2A6D)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "✨ Include: Pennello Ondulato, Neon Glow Pulsante, Creatore Sticker stile WhatsApp",
+                                    color = Color(0xFFFFE082),
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                                Button(
+                                    onClick = { showPaywallDialog = true },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFFF2A6D),
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth().testTag("open_paywall_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Acquista Versione Completa (4,99 €)",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Surface(
+                            color = Color(0x334ADE80),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0x664ADE80)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = Color(0xFF4ADE80),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "VIP Pass a vita attivo per questa app",
+                                    color = Color(0xFF81C784),
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Notifica Disegno Partner
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF100F1C), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = Color(0xFFD0BCFF),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Notifiche disegno partner",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "Ricevi un avviso quando il partner disegna",
+                                    color = Color(0xFF9E9DB5),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = partnerNotificationsEnabled,
+                            onCheckedChange = { viewModel.setPartnerNotificationsEnabled(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF7C4DFF),
+                                uncheckedThumbColor = Color(0xFFB0AEC7),
+                                uncheckedTrackColor = Color(0xFF282638)
+                            ),
+                            modifier = Modifier.testTag("partner_notifications_switch")
+                        )
+                    }
+                }
+            }
+
             // Big Prominent Action: Disegna su Schermo Subito (Bolla Fluttuante)
             Button(
                 onClick = {
@@ -1078,6 +1258,18 @@ fun MainDrawingScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Paywall VIP Dialog
+        if (showPaywallDialog) {
+            PaywallDialog(
+                onDismiss = { showPaywallDialog = false },
+                onUnlockSuccess = {
+                    viewModel.unlockPremium(true)
+                    showPaywallDialog = false
+                    Toast.makeText(context, "LockDraw VIP sbloccato a 4,99 €! 🎉", Toast.LENGTH_LONG).show()
+                }
+            )
         }
     }
 }

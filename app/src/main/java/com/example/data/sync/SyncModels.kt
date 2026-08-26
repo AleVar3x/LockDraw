@@ -17,7 +17,8 @@ sealed class SyncAction {
         val strokeWidth: Float,
         val brushType: BrushType,
         val alpha: Float,
-        val authorId: String
+        val authorId: String,
+        val modifier: com.example.data.model.StrokeModifier = com.example.data.model.StrokeModifier.NONE
     ) : SyncAction()
 
     data class StrokePoints(
@@ -93,6 +94,7 @@ object SyncActionSerializer {
                 json.put("brushType", action.brushType.name)
                 json.put("alpha", action.alpha.toDouble())
                 json.put("authorId", action.authorId)
+                json.put("modifier", action.modifier.name)
             }
             is SyncAction.StrokePoints -> {
                 json.put("type", "STROKE_POINTS")
@@ -117,6 +119,7 @@ object SyncActionSerializer {
                 json.put("brushType", s.brushType.name)
                 json.put("alpha", s.alpha.toDouble())
                 json.put("authorId", s.authorId)
+                json.put("modifier", s.modifier.name)
                 val sb = StringBuilder()
                 s.points.forEachIndexed { index, p ->
                     if (index > 0) sb.append(';')
@@ -197,6 +200,7 @@ object SyncActionSerializer {
                     sObj.put("brushType", s.brushType.name)
                     sObj.put("alpha", s.alpha.toDouble())
                     sObj.put("authorId", s.authorId)
+                    sObj.put("modifier", s.modifier.name)
                     val sb = StringBuilder()
                     s.points.forEachIndexed { index, p ->
                         if (index > 0) sb.append(';')
@@ -277,6 +281,7 @@ object SyncActionSerializer {
                     for (i in 0 until strokesArr.length()) {
                         val sObj = strokesArr.getJSONObject(i)
                         val pts = parsePoints(sObj)
+                        val mod = try { com.example.data.model.StrokeModifier.valueOf(sObj.optString("modifier", "NONE")) } catch (e: Exception) { com.example.data.model.StrokeModifier.NONE }
                         strokesList.add(
                             DrawingStroke(
                                 id = sObj.getString("strokeId"),
@@ -285,7 +290,8 @@ object SyncActionSerializer {
                                 strokeWidth = sObj.getDouble("strokeWidth").toFloat(),
                                 brushType = try { BrushType.valueOf(sObj.optString("brushType", "PEN")) } catch (e: Exception) { BrushType.PEN },
                                 authorId = sObj.optString("authorId", "partner"),
-                                alpha = sObj.optDouble("alpha", 1.0).toFloat()
+                                alpha = sObj.optDouble("alpha", 1.0).toFloat(),
+                                modifier = mod
                             )
                         )
                     }
@@ -315,6 +321,7 @@ object SyncActionSerializer {
                     )
                 }
                 "STROKE_BEGIN" -> {
+                    val mod = try { com.example.data.model.StrokeModifier.valueOf(json.optString("modifier", "NONE")) } catch (e: Exception) { com.example.data.model.StrokeModifier.NONE }
                     SyncAction.StrokeBegin(
                         strokeId = json.getString("strokeId"),
                         x = json.getDouble("x").toFloat(),
@@ -323,7 +330,8 @@ object SyncActionSerializer {
                         strokeWidth = json.getDouble("strokeWidth").toFloat(),
                         brushType = BrushType.valueOf(json.optString("brushType", "PEN")),
                         alpha = json.optDouble("alpha", 1.0).toFloat(),
-                        authorId = json.optString("authorId", "partner")
+                        authorId = json.optString("authorId", "partner"),
+                        modifier = mod
                     )
                 }
                 "STROKE_POINTS" -> {
@@ -336,6 +344,7 @@ object SyncActionSerializer {
                 }
                 "STROKE_FINISHED" -> {
                     val pts = parsePoints(json)
+                    val mod = try { com.example.data.model.StrokeModifier.valueOf(json.optString("modifier", "NONE")) } catch (e: Exception) { com.example.data.model.StrokeModifier.NONE }
                     val stroke = DrawingStroke(
                         id = json.getString("strokeId"),
                         points = pts,
@@ -343,7 +352,8 @@ object SyncActionSerializer {
                         strokeWidth = json.getDouble("strokeWidth").toFloat(),
                         brushType = BrushType.valueOf(json.optString("brushType", "PEN")),
                         authorId = json.optString("authorId", "partner"),
-                        alpha = json.optDouble("alpha", 1.0).toFloat()
+                        alpha = json.optDouble("alpha", 1.0).toFloat(),
+                        modifier = mod
                     )
                     SyncAction.StrokeFinished(stroke)
                 }

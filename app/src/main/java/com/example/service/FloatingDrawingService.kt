@@ -146,6 +146,7 @@ class FloatingDrawingService : Service() {
                     val placedStickers by repository.placedStickers.collectAsState()
                     val partnerPresence by repository.partnerPresence.collectAsState()
                     val floatingReactions by repository.floatingReactions.collectAsState()
+                    val isMyDrawingsTransparent by repository.isMyDrawingsTransparent.collectAsState()
 
                     com.example.ui.components.DrawingCanvas(
                         strokes = strokes,
@@ -155,6 +156,7 @@ class FloatingDrawingService : Service() {
                         selectedStickerId = null,
                         partnerPresence = partnerPresence,
                         floatingReactions = floatingReactions,
+                        isMyDrawingsTransparent = isMyDrawingsTransparent,
                         onStartDraw = { _, _ -> },
                         onContinueDraw = { _, _ -> },
                         onFinishDraw = {},

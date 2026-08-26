@@ -54,6 +54,7 @@ fun LockscreenSimulatorDialog(
     stickers: List<PlacedSticker>,
     partnerPresence: PartnerPresence,
     floatingReactions: List<FloatingHeartReaction>,
+    isMyDrawingsTransparent: Boolean = false,
     onDismiss: () -> Unit
 ) {
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
@@ -91,6 +92,7 @@ fun LockscreenSimulatorDialog(
                 selectedStickerId = null,
                 partnerPresence = partnerPresence,
                 floatingReactions = floatingReactions,
+                isMyDrawingsTransparent = isMyDrawingsTransparent,
                 onStartDraw = { _, _ -> },
                 onContinueDraw = { _, _ -> },
                 onFinishDraw = {},
