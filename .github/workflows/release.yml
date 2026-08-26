@@ -47,11 +47,12 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
         run: |
           if [ -f gradlew ]; then
-            ./gradlew assembleRelease --no-daemon --stacktrace
+            ./gradlew assembleRelease --stacktrace
           else
-            gradle assembleRelease --no-daemon --stacktrace
+            gradle assembleRelease --stacktrace
           fi
 
       - name: Find and Prepare APK for Release
