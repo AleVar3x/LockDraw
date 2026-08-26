@@ -298,13 +298,21 @@ class DrawingRepository private constructor(private val application: Application
                             }
                         }
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing("ha appena disegnato sulla tua schermata! 🎨")
+                        if (action.stroke.authorId != syncManager.myDeviceId && syncManager.isMatched.value && action.stroke.points.isNotEmpty()) {
+                            handlePartnerUpdatedDrawing("ha appena disegnato sulla tua schermata! 🎨")
+                        } else {
+                            handlePartnerUpdatedDrawing(null)
+                        }
                     }
                     is SyncAction.PlaceSticker -> {
                         if (_placedStickers.value.none { it.id == action.sticker.id }) {
                             _placedStickers.value = _placedStickers.value + action.sticker
                             persistCurrentState()
-                            handlePartnerUpdatedDrawing("ha aggiunto un nuovo sticker sulla tela! ✨")
+                            if (action.sticker.authorId != syncManager.myDeviceId && syncManager.isMatched.value) {
+                                handlePartnerUpdatedDrawing("ha aggiunto un nuovo sticker sulla tela! ✨")
+                            } else {
+                                handlePartnerUpdatedDrawing(null)
+                            }
                         }
                     }
                     is SyncAction.UpdateSticker -> {
@@ -312,12 +320,12 @@ class DrawingRepository private constructor(private val application: Application
                             if (it.id == action.sticker.id) action.sticker else it
                         }
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing("ha spostato uno sticker sulla tela!")
+                        handlePartnerUpdatedDrawing(null)
                     }
                     is SyncAction.RemoveSticker -> {
                         _placedStickers.value = _placedStickers.value.filter { it.id != action.stickerId }
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing()
+                        handlePartnerUpdatedDrawing(null)
                     }
                     is SyncAction.ClearAll -> {
                         saveSnapshotForUndo()
@@ -325,13 +333,13 @@ class DrawingRepository private constructor(private val application: Application
                         _placedStickers.value = emptyList()
                         _partnerDraftStroke.value = null
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing("ha pulito la tela per un nuovo disegno insieme 🧼")
+                        handlePartnerUpdatedDrawing(null)
                     }
                     is SyncAction.Undo -> {
                         if (_strokes.value.isNotEmpty()) {
                             _strokes.value = _strokes.value.dropLast(1)
                             persistCurrentState()
-                            handlePartnerUpdatedDrawing()
+                            handlePartnerUpdatedDrawing(null)
                         }
                     }
                     is SyncAction.HeartPing -> {
@@ -353,7 +361,7 @@ class DrawingRepository private constructor(private val application: Application
                             customWallpaperUri = action.customUri
                         )
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing("ha cambiato il tema dello sfondo! 🖼️")
+                        handlePartnerUpdatedDrawing(null)
                     }
                     is SyncAction.RequestSnapshot -> {
                         // Partner just joined and requested current canvas state
@@ -369,12 +377,12 @@ class DrawingRepository private constructor(private val application: Application
                         }
                     }
                     is SyncAction.FullSnapshot -> {
-                        // Received complete canvas snapshot from partner (including after erasing)
+                        // Received complete canvas snapshot from partner (including after erasing or on initial sync)
                         _strokes.value = action.strokes
                         _placedStickers.value = action.stickers
                         _lockscreenConfig.value = _lockscreenConfig.value.copy(wallpaperTheme = action.wallpaperTheme)
                         persistCurrentState()
-                        handlePartnerUpdatedDrawing("ha aggiornato la tela condivisa! 💖")
+                        handlePartnerUpdatedDrawing(null)
                     }
                     else -> {}
                 }

@@ -117,6 +117,8 @@ class PartnerSyncManager(
     // Deduplication of received action IDs (bounded to prevent memory bloat over long sessions)
     private val processedActionIds = Collections.synchronizedSet(LinkedHashSet<String>())
     private var lastSnapshotTimestamp: Long = System.currentTimeMillis()
+    private var lastProcessedCanvasSignature: String? = null
+    private val sessionStartTime: Long = System.currentTimeMillis()
 
     private var firestoreListener: ListenerRegistration? = null
     private var watchdogJob: Job? = null
@@ -502,17 +504,22 @@ class PartnerSyncManager(
             val actionId = snapshot.getString("last_action_id")
             val actionSender = snapshot.getString("last_action_sender")
             val actionJson = snapshot.getString("last_action_json")
+            val actionTime = snapshot.getLong("updatedAt") ?: 0L
 
-            if (!actionId.isNullOrBlank() && actionSender != myDeviceId && recordProcessedAction(actionId)) {
-                if (!actionJson.isNullOrBlank()) {
-                    val action = SyncActionSerializer.fromJson(actionJson)
-                    if (action != null) {
-                        handleIncomingAction(action)
+            if (!actionId.isNullOrBlank() && actionSender != myDeviceId) {
+                // If action occurred before this app session started (>15s ago), record it as seen to avoid stale notifications
+                val isStaleHistoricalAction = actionTime > 0 && (sessionStartTime - actionTime > 15_000L)
+                if (recordProcessedAction(actionId)) {
+                    if (!isStaleHistoricalAction && !actionJson.isNullOrBlank()) {
+                        val action = SyncActionSerializer.fromJson(actionJson)
+                        if (action != null) {
+                            handleIncomingAction(action)
+                        }
                     }
                 }
             }
 
-            // 4. Handle Full Snapshot update (for full synchronization)
+            // 4. Handle Full Snapshot update (for full synchronization without repetitive heartbeat churn)
             val strokesJson = snapshot.getString("strokes_json")
             val stickersJson = snapshot.getString("stickers_json")
             val lastUpdateBy = snapshot.getString("updated_by")
@@ -521,16 +528,21 @@ class PartnerSyncManager(
                 val themeName = snapshot.getString("wallpaperTheme") ?: "FROSTED_GLASS"
                 val theme = try { WallpaperTheme.valueOf(themeName) } catch (e: Exception) { WallpaperTheme.FROSTED_GLASS }
 
-                val strokesList = if (!strokesJson.isNullOrBlank()) parseStrokesFromJson(strokesJson) else emptyList()
-                val stickersList = if (!stickersJson.isNullOrBlank()) parseStickersFromJson(stickersJson) else emptyList()
+                val currentSignature = "$lastUpdateBy:${strokesJson?.hashCode() ?: 0}:${stickersJson?.hashCode() ?: 0}:$themeName"
+                if (currentSignature != lastProcessedCanvasSignature) {
+                    lastProcessedCanvasSignature = currentSignature
 
-                val fullSnapshot = SyncAction.FullSnapshot(
-                    strokes = strokesList,
-                    stickers = stickersList,
-                    wallpaperTheme = theme,
-                    authorId = lastUpdateBy ?: "partner"
-                )
-                handleIncomingAction(fullSnapshot)
+                    val strokesList = if (!strokesJson.isNullOrBlank()) parseStrokesFromJson(strokesJson) else emptyList()
+                    val stickersList = if (!stickersJson.isNullOrBlank()) parseStickersFromJson(stickersJson) else emptyList()
+
+                    val fullSnapshot = SyncAction.FullSnapshot(
+                        strokes = strokesList,
+                        stickers = stickersList,
+                        wallpaperTheme = theme,
+                        authorId = lastUpdateBy ?: "partner"
+                    )
+                    handleIncomingAction(fullSnapshot)
+                }
             }
         } catch (e: Exception) {
             Log.e("PartnerSync", "Error handling Firestore snapshot", e)
