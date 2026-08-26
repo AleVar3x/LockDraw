@@ -18,16 +18,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'gradle'
 
-      - name: Grant execute permission for Gradle wrapper (if present)
-        run: |
-          if [ -f gradlew ]; then chmod +x gradlew; fi
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for Gradle wrapper
+        run: chmod +x gradlew
 
       # Crea il file Keystore per la firma dell'APK se configurato nei Secrets di GitHub
       - name: Decode Keystore
