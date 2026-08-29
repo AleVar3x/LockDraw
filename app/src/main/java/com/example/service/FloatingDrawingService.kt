@@ -26,7 +26,6 @@ import com.example.MainActivity
 import com.example.R
 import com.example.data.repository.DrawingRepository
 import com.example.ui.theme.MyApplicationTheme
-import com.example.util.WallpaperTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -147,6 +146,8 @@ class FloatingDrawingService : Service() {
                     val partnerPresence by repository.partnerPresence.collectAsState()
                     val floatingReactions by repository.floatingReactions.collectAsState()
                     val isMyDrawingsTransparent by repository.isMyDrawingsTransparent.collectAsState()
+                    val myName by repository.myName.collectAsState()
+                    val partnerCustomName by repository.partnerCustomName.collectAsState()
 
                     com.example.ui.components.DrawingCanvas(
                         strokes = strokes,
@@ -157,6 +158,9 @@ class FloatingDrawingService : Service() {
                         partnerPresence = partnerPresence,
                         floatingReactions = floatingReactions,
                         isMyDrawingsTransparent = isMyDrawingsTransparent,
+                        myDeviceId = repository.syncManager.myDeviceId,
+                        myName = myName,
+                        partnerName = partnerPresence.partnerName.ifBlank { partnerCustomName.ifBlank { "Partner" } },
                         onStartDraw = { _, _ -> },
                         onContinueDraw = { _, _ -> },
                         onFinishDraw = {},
@@ -326,11 +330,6 @@ class FloatingDrawingService : Service() {
             ACTION_EXPAND_CANVAS -> {
                 expandOverlayCanvas()
             }
-            ACTION_APPLY_LOCKSCREEN -> {
-                serviceScope.launch {
-                    repository.applyToDeviceWallpaper(WallpaperTarget.LOCKSCREEN)
-                }
-            }
             ACTION_STOP_SERVICE -> {
                 stopSelf()
             }
@@ -369,19 +368,11 @@ class FloatingDrawingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val lockIntent = Intent(this, FloatingDrawingService::class.java).apply {
-            action = ACTION_APPLY_LOCKSCREEN
-        }
-        val pLockIntent = PendingIntent.getService(
-            this, 2, lockIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
         val stopIntent = Intent(this, FloatingDrawingService::class.java).apply {
             action = ACTION_STOP_SERVICE
         }
         val pStopIntent = PendingIntent.getService(
-            this, 3, stopIntent,
+            this, 2, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -391,7 +382,6 @@ class FloatingDrawingService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pMainIntent)
             .addAction(R.mipmap.ic_launcher, "Disegna Subito", pExpandIntent)
-            .addAction(R.mipmap.ic_launcher, "Imposta Lockscreen", pLockIntent)
             .addAction(R.mipmap.ic_launcher, "Chiudi", pStopIntent)
             .setOngoing(true)
             .build()
@@ -412,7 +402,6 @@ class FloatingDrawingService : Service() {
         const val NOTIFICATION_ID = 1001
 
         const val ACTION_EXPAND_CANVAS = "com.example.lockdraw.EXPAND_CANVAS"
-        const val ACTION_APPLY_LOCKSCREEN = "com.example.lockdraw.APPLY_LOCKSCREEN"
         const val ACTION_STOP_SERVICE = "com.example.lockdraw.STOP_SERVICE"
 
         fun start(context: Context) {

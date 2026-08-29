@@ -62,9 +62,10 @@ data class DrawingStroke(
     val colorArgb: Int = Color(0xFFFF2A6D).toArgb(),
     val strokeWidth: Float = 12f,
     val brushType: BrushType = BrushType.PEN,
-    val authorId: String = "me", // "me" or "partner"
+    val authorId: String = "me", // "me" or deviceId or "partner"
     val alpha: Float = 1.0f,
-    val modifier: StrokeModifier = StrokeModifier.NONE
+    val modifier: StrokeModifier = StrokeModifier.NONE,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 data class PlacedSticker(
@@ -74,7 +75,8 @@ data class PlacedSticker(
     val y: Float, // percentage 0.0 - 1.0 of canvas height
     val scale: Float = 1.0f,
     val rotation: Float = 0f,
-    val authorId: String = "me"
+    val authorId: String = "me",
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 enum class WallpaperTheme(val title: String, val gradientColors: List<Long>, val isDark: Boolean) {

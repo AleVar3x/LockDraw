@@ -45,20 +45,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val PRESET_COLORS = listOf(
-    Color(0xFFFF0055), // Hot Neon Pink
-    Color(0xFF00F5FF), // Vivid Neon Cyan
-    Color(0xFF00FF66), // Laser Lime Green
-    Color(0xFFFFEA00), // Electric Neon Yellow
-    Color(0xFFFF6D00), // Radiant Orange
-    Color(0xFFD500F9), // Hyper Magenta
-    Color(0xFF00E5FF), // Bright Celeste
-    Color(0xFF7C4DFF), // Electric Violet
-    Color(0xFFFF1744), // Fluorescent Red
-    Color(0xFF00E676), // Mint Emerald
-    Color(0xFFFFFFFF), // Pure Brilliant White
-    Color(0xFF101014)  // Pitch Black
+// 18 chromatic color pairs: Row 1 has vivid/pure hues, Row 2 has matching soft/pastel/toned shades
+// Ordered strictly chromatically: Pink -> Rose -> Magenta -> Purple -> Indigo -> Blue -> Cyan -> Aqua -> Emerald -> Green -> Lime -> Gold -> Orange -> Deep Orange -> Coral/Red -> Brown/Earthy -> Slate/Gray -> White/Black
+val CHROMATIC_COLOR_PAIRS: List<Pair<Color, Color>> = listOf(
+    Pair(Color(0xFFFF007F), Color(0xFFFFB6C1)), // Hot Neon Pink / Soft Pastel Pink
+    Pair(Color(0xFFFF2A6D), Color(0xFFF8BBD0)), // Vivid Rose / Soft Rose Bubblegum
+    Pair(Color(0xFFD500F9), Color(0xFFE1BEE7)), // Hyper Magenta / Soft Lavender
+    Pair(Color(0xFF9C27B0), Color(0xFFD1C4E9)), // Vivid Purple / Pastel Lilac
+    Pair(Color(0xFF7C4DFF), Color(0xFFC5CAE9)), // Electric Violet / Soft Periwinkle
+    Pair(Color(0xFF3D5AFE), Color(0xFFBBDEFB)), // Royal Indigo / Pastel Baby Blue
+    Pair(Color(0xFF2979FF), Color(0xFF90CAF9)), // Bright Dodger Blue / Ice Blue
+    Pair(Color(0xFF00E5FF), Color(0xFFB2EBF2)), // Vivid Cyan / Pastel Aqua
+    Pair(Color(0xFF00E676), Color(0xFFB9F6CA)), // Mint Emerald / Pastel Mint Green
+    Pair(Color(0xFF00FF66), Color(0xFFC8E6C9)), // Laser Neon Green / Soft Spring Green
+    Pair(Color(0xFF76FF03), Color(0xFFDCEDC8)), // Electric Lime / Light Olive Lime
+    Pair(Color(0xFFFFEA00), Color(0xFFFFF9C4)), // Neon Sun Yellow / Pastel Cream Yellow
+    Pair(Color(0xFFFFC107), Color(0xFFFFE0B2)), // Amber Warm Gold / Pastel Peach
+    Pair(Color(0xFFFF6D00), Color(0xFFFFCCBC)), // Radiant Orange / Pastel Apricot
+    Pair(Color(0xFFFF3D00), Color(0xFFFFAB91)), // Deep Orange / Soft Coral Salmon
+    Pair(Color(0xFFFF1744), Color(0xFFFFCDD2)), // Fluorescent Red / Soft Candy Red
+    Pair(Color(0xFF8D6E63), Color(0xFFD7CCC8)), // Warm Mocha Brown / Milk Tea Cream
+    Pair(Color(0xFF101014), Color(0xFFFFFFFF))  // Pitch Black / Pure Brilliant White
 )
+
+val PRESET_COLORS_ROW1 = CHROMATIC_COLOR_PAIRS.map { it.first }
+val PRESET_COLORS_ROW2 = CHROMATIC_COLOR_PAIRS.map { it.second }
+val ALL_PRESET_COLORS = PRESET_COLORS_ROW1 + PRESET_COLORS_ROW2
 
 @Composable
 fun ColorPickerBar(
@@ -67,57 +79,78 @@ fun ColorPickerBar(
     modifier: Modifier = Modifier
 ) {
     var showCustomDialog by remember { mutableStateOf(false) }
+    val unifiedScrollState = rememberScrollState()
 
+    // Unified 2-row chromatic palette: single scroll container moving both rows synchronously
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .horizontalScroll(unifiedScrollState)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        PRESET_COLORS.forEach { color ->
-            val isSelected = color == selectedColor
-            Box(
+        // Custom RGB Color Picker Button Column (Leading controls)
+        Column(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Row 1: Custom Palette / Color Wheel icon
+            Surface(
+                color = Color(0xCC1A1B28),
+                shape = CircleShape,
                 modifier = Modifier
                     .size(32.dp)
-                    .clip(CircleShape)
-                    .background(color)
-                    .clickable { onColorSelected(color) }
-                    .border(
-                        width = if (isSelected) 2.5.dp else 1.dp,
-                        color = if (isSelected) Color.White else Color(0x33FFFFFF),
-                        shape = CircleShape
-                    )
-                    .testTag("color_swatch_${color.value}"),
-                contentAlignment = Alignment.Center
+                    .clickable { showCustomDialog = true }
+                    .testTag("custom_color_picker_btn"),
+                border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0x66FFFFFF))
             ) {
-                if (isSelected) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(if (color == Color.White || color == Color(0xFFFFEA00) || color == Color(0xFF00F5FF)) Color.Black else Color.White, CircleShape)
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.ColorLens,
+                        contentDescription = "Colori Personalizzati",
+                        tint = Color(0xFFD0BCFF),
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+
+            // Row 2: RGB Custom Slider shortcut
+            Surface(
+                color = Color(0x33FFFFFF),
+                shape = CircleShape,
+                modifier = Modifier
+                    .size(32.dp)
+                    .clickable { showCustomDialog = true }
+                    .testTag("custom_rgb_picker_btn"),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x44FFFFFF))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "RGB",
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
 
-        // Custom color picker button (Glass style)
-        Surface(
-            color = Color(0xCC1A1B28),
-            shape = CircleShape,
-            modifier = Modifier
-                .size(34.dp)
-                .clickable { showCustomDialog = true }
-                .testTag("custom_color_picker_btn"),
-            border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0x66FFFFFF))
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Default.ColorLens,
-                    contentDescription = "Colori Personalizzati",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
+        // Chromatic Color Columns: each column has Row 1 (Vivid) and Row 2 (Pastel/Complementary)
+        CHROMATIC_COLOR_PAIRS.forEach { (colorTop, colorBottom) ->
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                ColorSwatch(
+                    color = colorTop,
+                    isSelected = colorTop == selectedColor,
+                    onSelect = { onColorSelected(colorTop) }
+                )
+                ColorSwatch(
+                    color = colorBottom,
+                    isSelected = colorBottom == selectedColor,
+                    onSelect = { onColorSelected(colorBottom) }
                 )
             }
         }
@@ -132,6 +165,41 @@ fun ColorPickerBar(
                 showCustomDialog = false
             }
         )
+    }
+}
+
+@Composable
+private fun ColorSwatch(
+    color: Color,
+    isSelected: Boolean,
+    onSelect: () -> Unit
+) {
+    val isLightColor = color.red * 0.299f + color.green * 0.587f + color.blue * 0.114f > 0.65f
+
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(color)
+            .clickable { onSelect() }
+            .border(
+                width = if (isSelected) 2.5.dp else 1.dp,
+                color = if (isSelected) (if (isLightColor) Color(0xFF101014) else Color.White) else Color(0x33FFFFFF),
+                shape = CircleShape
+            )
+            .testTag("color_swatch_${color.value}"),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(
+                        if (isLightColor) Color.Black else Color.White,
+                        CircleShape
+                    )
+            )
+        }
     }
 }
 

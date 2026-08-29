@@ -1,6 +1,5 @@
 package com.example.util
 
-import android.app.WallpaperManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -10,23 +9,12 @@ import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Shader
-import android.os.Build
-import android.util.Log
-import android.widget.Toast
 import com.example.data.model.BrushType
 import com.example.data.model.DrawingPoint
 import com.example.data.model.DrawingStroke
 import com.example.data.model.LockscreenConfig
 import com.example.data.model.PlacedSticker
 import com.example.data.model.WallpaperTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-
-enum class WallpaperTarget {
-    LOCKSCREEN,
-    HOMESCREEN,
-    BOTH
-}
 
 object WallpaperHelper {
 
@@ -115,7 +103,7 @@ object WallpaperHelper {
                     strokeWidth = stroke.strokeWidth * (width / 280f)
                     alpha = (0.5f * 255).toInt()
                 }
-                val path = createPath(stroke.points, width, height)
+                val path = createSmoothPath(stroke.points, width, height)
                 canvas.drawPath(path, glowPaint)
             }
             BrushType.RAINBOW -> {
@@ -134,68 +122,50 @@ object WallpaperHelper {
             else -> {}
         }
 
-        val path = createPath(stroke.points, width, height)
+        val path = createSmoothPath(stroke.points, width, height)
         canvas.drawPath(path, paint)
     }
 
-    private fun createPath(points: List<DrawingPoint>, width: Int, height: Int): Path {
+    private fun smoothPoints(rawPoints: List<DrawingPoint>): List<DrawingPoint> {
+        if (rawPoints.size <= 2) return rawPoints
+        val smoothed = ArrayList<DrawingPoint>(rawPoints.size)
+        smoothed.add(rawPoints.first())
+        for (i in 1 until rawPoints.size - 1) {
+            val p0 = rawPoints[i - 1]
+            val p1 = rawPoints[i]
+            val p2 = rawPoints[i + 1]
+            val sx = 0.25f * p0.x + 0.50f * p1.x + 0.25f * p2.x
+            val sy = 0.25f * p0.y + 0.50f * p1.y + 0.25f * p2.y
+            val sp = 0.25f * p0.pressure + 0.50f * p1.pressure + 0.25f * p2.pressure
+            smoothed.add(DrawingPoint(sx, sy, sp, p1.timestamp))
+        }
+        smoothed.add(rawPoints.last())
+        return smoothed
+    }
+
+    private fun createSmoothPath(points: List<DrawingPoint>, width: Int, height: Int): Path {
         val path = Path()
         if (points.isEmpty()) return path
 
-        path.moveTo(points[0].x * width, points[0].y * height)
-        for (i in 1 until points.size) {
-            val p = points[i]
-            path.lineTo(p.x * width, p.y * height)
+        val smoothed = if (points.size > 2) smoothPoints(points) else points
+        val first = smoothed[0]
+        path.moveTo(first.x * width, first.y * height)
+
+        if (smoothed.size == 2) {
+            val second = smoothed[1]
+            path.lineTo(second.x * width, second.y * height)
+            return path
         }
+
+        for (i in 1 until smoothed.size) {
+            val prev = smoothed[i - 1]
+            val curr = smoothed[i]
+            val midX = ((prev.x + curr.x) / 2f) * width
+            val midY = ((prev.y + curr.y) / 2f) * height
+            path.quadTo(prev.x * width, prev.y * height, midX, midY)
+        }
+        val last = smoothed.last()
+        path.lineTo(last.x * width, last.y * height)
         return path
-    }
-
-    suspend fun applyToDeviceWallpaper(
-        context: Context,
-        strokes: List<DrawingStroke>,
-        stickers: List<PlacedSticker>,
-        config: LockscreenConfig,
-        target: WallpaperTarget = WallpaperTarget.LOCKSCREEN
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val displayMetrics = context.resources.displayMetrics
-            val w = displayMetrics.widthPixels.coerceAtLeast(1080)
-            val h = displayMetrics.heightPixels.coerceAtLeast(1920)
-
-            val bitmap = createDrawingBitmap(
-                context = context,
-                strokes = strokes,
-                stickers = stickers,
-                config = config,
-                width = w,
-                height = h,
-                includeBackground = true
-            )
-
-            val wallpaperManager = WallpaperManager.getInstance(context)
-
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    val flags = when (target) {
-                        WallpaperTarget.LOCKSCREEN -> WallpaperManager.FLAG_LOCK
-                        WallpaperTarget.HOMESCREEN -> WallpaperManager.FLAG_SYSTEM
-                        WallpaperTarget.BOTH -> WallpaperManager.FLAG_LOCK or WallpaperManager.FLAG_SYSTEM
-                    }
-                    wallpaperManager.setBitmap(bitmap, null, true, flags)
-                } else {
-                    wallpaperManager.setBitmap(bitmap)
-                }
-            } finally {
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
-                }
-            }
-
-            Log.d("WallpaperHelper", "Wallpaper successfully set to: $target")
-            true
-        } catch (e: Exception) {
-            Log.e("WallpaperHelper", "Failed to apply wallpaper", e)
-            false
-        }
     }
 }

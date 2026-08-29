@@ -62,7 +62,7 @@ class PartnerSyncManager(
 
     companion object {
         private const val CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        const val TWO_WEEKS_MILLIS = 14L * 24 * 60 * 60 * 1000L // 2 weeks (1,209,600,000 ms)
+        const val THREE_DAYS_MILLIS = 3L * 24 * 60 * 60 * 1000L // 3 days (259,200,000 ms)
 
         fun generateRandomRoomCode(length: Int = 16): String {
             return (1..length)
@@ -186,10 +186,11 @@ class PartnerSyncManager(
                 val now = System.currentTimeMillis()
                 db.collection("rooms").document(roomCode).set(
                     mapOf(
+                        "user_names" to mapOf(myDeviceId to name),
                         "presence_names" to mapOf(myDeviceId to name),
                         "updatedAt" to now,
-                        "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                        "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                        "expiresAt" to (now + THREE_DAYS_MILLIS),
+                        "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
                     ),
                     SetOptions.merge()
                 )
@@ -233,8 +234,8 @@ class PartnerSyncManager(
                     "last_join_name" to _myName.value,
                     "last_join_timestamp" to now,
                     "updatedAt" to now,
-                    "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                    "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                    "expiresAt" to (now + THREE_DAYS_MILLIS),
+                    "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
                 )
                 db.collection("rooms").document(cleanCode).set(joinData, SetOptions.merge())
             } catch (e: Exception) {
@@ -388,13 +389,12 @@ class PartnerSyncManager(
         val data = hashMapOf<String, Any>(
             "createdAt" to now,
             "updatedAt" to now,
-            "expiresAt" to (now + TWO_WEEKS_MILLIS),
-            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
-            "strokes_json" to "[]",
-            "stickers_json" to "[]",
-            "wallpaperTheme" to "FROSTED_GLASS",
+            "expiresAt" to (now + THREE_DAYS_MILLIS),
+            "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS)),
+            "user_names" to mapOf(myDeviceId to _myName.value),
             "presence" to mapOf(myDeviceId to now),
             "presence_names" to mapOf(myDeviceId to _myName.value),
+            "layers" to emptyMap<String, Any>(),
             "last_join_device_id" to myDeviceId,
             "last_join_name" to _myName.value,
             "last_join_timestamp" to now
@@ -404,11 +404,12 @@ class PartnerSyncManager(
 
     private fun handleDocumentSnapshot(snapshot: DocumentSnapshot) {
         try {
-            // Condition Firestore: If record hasn't been updated for > 2 weeks, delete it
+            // Condition Firestore: If record hasn't been updated for > 3 days, delete it
             val updatedAt = snapshot.getLong("updatedAt") ?: snapshot.getLong("createdAt") ?: 0L
+            val expiresAt = snapshot.getLong("expiresAt") ?: 0L
             val now = System.currentTimeMillis()
-            if (updatedAt > 0 && (now - updatedAt > TWO_WEEKS_MILLIS)) {
-                Log.i("PartnerSync", "Room record ${snapshot.id} has not been updated for > 2 weeks. Deleting Firestore record.")
+            if ((updatedAt > 0 && (now - updatedAt > THREE_DAYS_MILLIS)) || (expiresAt in 1..now)) {
+                Log.i("PartnerSync", "Room record ${snapshot.id} has expired or not been updated for > 3 days. Deleting Firestore record.")
                 scope.launch(Dispatchers.IO) {
                     try {
                         snapshot.reference.delete()
@@ -421,7 +422,9 @@ class PartnerSyncManager(
 
             // 1. Check partner presence & name
             val presenceMap = snapshot.get("presence") as? Map<*, *>
-            val namesMap = snapshot.get("presence_names") as? Map<*, *>
+            val presenceNamesMap = snapshot.get("presence_names") as? Map<*, *>
+            val userNamesMap = snapshot.get("user_names") as? Map<*, *>
+            val layersMap = snapshot.get("layers") as? Map<*, *>
             var partnerOnline = false
             var latestPartnerActive = 0L
             var remotePartnerName: String? = null
@@ -433,7 +436,7 @@ class PartnerSyncManager(
                     val timeLong = (timeVal as? Number)?.toLong() ?: 0L
                     if (idStr != myDeviceId && idStr.isNotBlank()) {
                         hasRemotePartnerDevice = true
-                        if (now - timeLong < 35_000) {
+                        if (now - timeLong < 240_000) {
                             partnerOnline = true
                             if (timeLong > latestPartnerActive) {
                                 latestPartnerActive = timeLong
@@ -443,10 +446,10 @@ class PartnerSyncManager(
                 }
             }
 
-            if (namesMap != null) {
-                for ((devId, nameVal) in namesMap) {
+            if (userNamesMap != null) {
+                for ((devId, nameVal) in userNamesMap) {
                     val idStr = devId?.toString() ?: ""
-                    val nameStr = nameVal?.toString() ?: ""
+                    val nameStr = nameVal?.toString()?.trim() ?: ""
                     if (idStr != myDeviceId && nameStr.isNotBlank()) {
                         remotePartnerName = nameStr
                         hasRemotePartnerDevice = true
@@ -454,10 +457,41 @@ class PartnerSyncManager(
                 }
             }
 
+            if (remotePartnerName.isNullOrBlank() && presenceNamesMap != null) {
+                for ((devId, nameVal) in presenceNamesMap) {
+                    val idStr = devId?.toString() ?: ""
+                    val nameStr = nameVal?.toString()?.trim() ?: ""
+                    if (idStr != myDeviceId && nameStr.isNotBlank()) {
+                        remotePartnerName = nameStr
+                        hasRemotePartnerDevice = true
+                    }
+                }
+            }
+
+            if (remotePartnerName.isNullOrBlank() && layersMap != null) {
+                for ((devId, layerVal) in layersMap) {
+                    val idStr = devId?.toString() ?: ""
+                    val layerObj = layerVal as? Map<*, *>
+                    val nameStr = layerObj?.get("user_name")?.toString()?.trim() ?: ""
+                    if (idStr != myDeviceId && nameStr.isNotBlank()) {
+                        remotePartnerName = nameStr
+                        hasRemotePartnerDevice = true
+                    }
+                }
+            }
+
+            if (remotePartnerName.isNullOrBlank()) {
+                val lastJoinName = snapshot.getString("last_join_name")
+                val lastJoinDev = snapshot.getString("last_join_device_id")
+                if (lastJoinDev != myDeviceId && !lastJoinName.isNullOrBlank()) {
+                    remotePartnerName = lastJoinName.trim()
+                }
+            }
+
             val customOverride = _partnerCustomName.value
             val resolvedPartnerName = when {
-                customOverride.isNotBlank() -> customOverride
                 !remotePartnerName.isNullOrBlank() -> remotePartnerName
+                customOverride.isNotBlank() -> customOverride
                 else -> _partnerPresence.value.partnerName.ifBlank { "Partner" }
             }
 
@@ -519,12 +553,45 @@ class PartnerSyncManager(
                 }
             }
 
-            // 4. Handle Full Snapshot update (for full synchronization without repetitive heartbeat churn)
+            // 4. Handle Per-User Layer Updates (Conflict-Free Multi-Layer Architecture)
+            // Reads layers.<partnerDeviceId> without overwriting the local board layer
+            if (layersMap != null) {
+                for ((devKey, layerVal) in layersMap) {
+                    val devId = devKey?.toString() ?: continue
+                    if (devId == myDeviceId || devId.isBlank()) continue
+
+                    val layerObj = layerVal as? Map<*, *> ?: continue
+                    val layerStrokesJson = layerObj["strokes_json"]?.toString()
+                    val layerStickersJson = layerObj["stickers_json"]?.toString()
+                    val layerVersion = (layerObj["version"] as? Number)?.toLong() ?: 1L
+                    val layerUpdatedAt = (layerObj["updatedAt"] as? Number)?.toLong() ?: now
+
+                    val layerSig = "$devId:$layerVersion:${layerStrokesJson?.hashCode() ?: 0}:${layerStickersJson?.hashCode() ?: 0}"
+                    val lastKnownSig = lastProcessedCanvasSignature
+                    if (!lastKnownSig.orEmpty().contains(layerSig)) {
+                        lastProcessedCanvasSignature = (lastKnownSig.orEmpty().split("|").takeLast(5) + layerSig).joinToString("|")
+
+                        val strokesList = if (!layerStrokesJson.isNullOrBlank()) parseStrokesFromJson(layerStrokesJson) else emptyList()
+                        val stickersList = if (!layerStickersJson.isNullOrBlank()) parseStickersFromJson(layerStickersJson) else emptyList()
+
+                        val userLayerSnapshot = SyncAction.UserLayerSnapshot(
+                            authorId = devId,
+                            strokes = strokesList,
+                            stickers = stickersList,
+                            layerVersion = layerVersion,
+                            updatedAt = layerUpdatedAt
+                        )
+                        handleIncomingAction(userLayerSnapshot)
+                    }
+                }
+            }
+
+            // 5. Legacy Fallback: Handle Full Snapshot update if older room format is present
             val strokesJson = snapshot.getString("strokes_json")
             val stickersJson = snapshot.getString("stickers_json")
             val lastUpdateBy = snapshot.getString("updated_by")
 
-            if (lastUpdateBy != myDeviceId && (!strokesJson.isNullOrBlank() || !stickersJson.isNullOrBlank())) {
+            if (layersMap == null && lastUpdateBy != myDeviceId && (!strokesJson.isNullOrBlank() || !stickersJson.isNullOrBlank())) {
                 val themeName = snapshot.getString("wallpaperTheme") ?: "FROSTED_GLASS"
                 val theme = try { WallpaperTheme.valueOf(themeName) } catch (e: Exception) { WallpaperTheme.FROSTED_GLASS }
 
@@ -535,13 +602,15 @@ class PartnerSyncManager(
                     val strokesList = if (!strokesJson.isNullOrBlank()) parseStrokesFromJson(strokesJson) else emptyList()
                     val stickersList = if (!stickersJson.isNullOrBlank()) parseStickersFromJson(stickersJson) else emptyList()
 
-                    val fullSnapshot = SyncAction.FullSnapshot(
+                    val legacySnapshot = SyncAction.UserLayerSnapshot(
+                        authorId = lastUpdateBy ?: "partner",
                         strokes = strokesList,
                         stickers = stickersList,
-                        wallpaperTheme = theme,
-                        authorId = lastUpdateBy ?: "partner"
+                        layerVersion = 1L,
+                        updatedAt = now,
+                        wallpaperTheme = theme
                     )
-                    handleIncomingAction(fullSnapshot)
+                    handleIncomingAction(legacySnapshot)
                 }
             }
         } catch (e: Exception) {
@@ -550,20 +619,31 @@ class PartnerSyncManager(
     }
 
     /**
-     * Purge rooms that have not been updated for 2 weeks.
+     * Purge rooms that have not been updated for 3 days or have expired.
      */
     private fun purgeStaleRoomsIfAny() {
         scope.launch(Dispatchers.IO) {
             try {
                 val db = firestore ?: return@launch
-                val twoWeeksAgo = System.currentTimeMillis() - TWO_WEEKS_MILLIS
+                val now = System.currentTimeMillis()
+                val threeDaysAgo = now - THREE_DAYS_MILLIS
                 db.collection("rooms")
-                    .whereLessThan("updatedAt", twoWeeksAgo)
-                    .limit(10)
+                    .whereLessThan("updatedAt", threeDaysAgo)
+                    .limit(20)
                     .get()
                     .addOnSuccessListener { snapshots ->
                         for (doc in snapshots.documents) {
-                            Log.i("PartnerSync", "Cleaning up stale room doc ${doc.id} inactive for > 2 weeks")
+                            Log.i("PartnerSync", "Cleaning up stale room doc ${doc.id} inactive for > 3 days")
+                            doc.reference.delete()
+                        }
+                    }
+                db.collection("rooms")
+                    .whereLessThan("expiresAt", now)
+                    .limit(20)
+                    .get()
+                    .addOnSuccessListener { snapshots ->
+                        for (doc in snapshots.documents) {
+                            Log.i("PartnerSync", "Cleaning up expired room doc ${doc.id}")
                             doc.reference.delete()
                         }
                     }
@@ -591,7 +671,8 @@ class PartnerSyncManager(
                         brushType = try { BrushType.valueOf(obj.optString("brushType", "PEN")) } catch (e: Exception) { BrushType.PEN },
                         authorId = obj.optString("authorId", "partner"),
                         alpha = obj.optDouble("alpha", 1.0).toFloat(),
-                        modifier = mod
+                        modifier = mod,
+                        createdAt = obj.optLong("createdAt", obj.optLong("ts", System.currentTimeMillis()))
                     )
                 )
             }
@@ -615,7 +696,8 @@ class PartnerSyncManager(
                         y = obj.getDouble("y").toFloat(),
                         scale = obj.optDouble("scale", 1.0).toFloat(),
                         rotation = obj.optDouble("rotation", 0.0).toFloat(),
-                        authorId = obj.optString("authorId", "partner")
+                        authorId = obj.optString("authorId", "partner"),
+                        createdAt = obj.optLong("createdAt", obj.optLong("ts", System.currentTimeMillis()))
                     )
                 )
             }
@@ -649,7 +731,7 @@ class PartnerSyncManager(
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
-                delay(12000)
+                delay(120_000) // 2 minutes heartbeat to drastically reduce writes on free tier
                 try {
                     val db = firestore ?: return@launch
                     val roomCode = _currentRoomCode.value
@@ -659,8 +741,8 @@ class PartnerSyncManager(
                             "presence" to mapOf(myDeviceId to now),
                             "presence_names" to mapOf(myDeviceId to _myName.value),
                             "updatedAt" to now,
-                            "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                            "expiresAt" to (now + THREE_DAYS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
                         ),
                         SetOptions.merge()
                     )
@@ -706,7 +788,7 @@ class PartnerSyncManager(
                     lastActiveMillis = System.currentTimeMillis()
                 )
             }
-            is SyncAction.FullSnapshot, is SyncAction.PlaceSticker -> {
+            is SyncAction.UserLayerSnapshot, is SyncAction.PlaceSticker -> {
                 _partnerPresence.value = _partnerPresence.value.copy(
                     isOnline = true,
                     lastActiveMillis = System.currentTimeMillis()
@@ -718,7 +800,7 @@ class PartnerSyncManager(
     }
 
     /**
-     * Broadcast an action to Firestore with 2-week TTL and expiration metadata.
+     * Broadcast an action to Firestore with 3-day TTL and expiration metadata.
      */
     fun broadcastAction(action: SyncAction) {
         val db = firestore ?: return
@@ -728,48 +810,25 @@ class PartnerSyncManager(
         val now = System.currentTimeMillis()
 
         when (action) {
-            is SyncAction.StrokeBegin, is SyncAction.StrokePoints -> {
-                // Throttle live drafting points to keep database writes clean and efficient
-                pendingDraftAction = action
-                if (draftThrottleJob?.isActive != true) {
-                    draftThrottleJob = scope.launch(Dispatchers.IO) {
-                        delay(120)
-                        val toSend = pendingDraftAction
-                        pendingDraftAction = null
-                        if (toSend != null) {
-                            val json = SyncActionSerializer.toJson(toSend)
-                            try {
-                                db.collection("rooms").document(roomCode).set(
-                                    mapOf(
-                                        "draft_json" to json,
-                                        "draft_sender" to myDeviceId
-                                    ),
-                                    SetOptions.merge()
-                                )
-                            } catch (e: Exception) {
-                                // ignore
-                            }
-                        }
-                    }
-                }
+            is SyncAction.StrokeBegin, is SyncAction.StrokePoints, is SyncAction.CursorMove -> {
+                // Draft & cursor are handled strictly locally to preserve free tier quota
             }
             is SyncAction.StrokeFinished -> {
-                draftThrottleJob?.cancel()
-                pendingDraftAction = null
                 val actionJson = SyncActionSerializer.toJson(action)
                 scope.launch(Dispatchers.IO) {
                     try {
                         db.collection("rooms").document(roomCode).set(
                             mapOf(
-                                "draft_json" to FieldValue.delete(),
-                                "draft_sender" to FieldValue.delete(),
                                 "last_action_id" to actionId,
                                 "last_action_sender" to myDeviceId,
                                 "last_action_json" to actionJson,
+                                "presence" to mapOf(myDeviceId to now),
+                                "presence_names" to mapOf(myDeviceId to _myName.value),
                                 "updated_by" to myDeviceId,
                                 "updatedAt" to now,
-                                "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                                "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                                "board_version" to FieldValue.increment(1),
+                                "expiresAt" to (now + THREE_DAYS_MILLIS),
+                                "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
                             ),
                             SetOptions.merge()
                         )
@@ -779,80 +838,80 @@ class PartnerSyncManager(
                     }
                 }
             }
-            is SyncAction.FullSnapshot -> {
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val strokesArr = JSONArray()
-                        action.strokes.forEach { s ->
-                            val sObj = JSONObject()
-                            sObj.put("strokeId", s.id)
-                            sObj.put("colorArgb", s.colorArgb)
-                            sObj.put("strokeWidth", s.strokeWidth.toDouble())
-                            sObj.put("brushType", s.brushType.name)
-                            sObj.put("alpha", s.alpha.toDouble())
-                            sObj.put("authorId", s.authorId)
-                            val sb = StringBuilder()
-                            s.points.forEachIndexed { idx, p ->
-                                if (idx > 0) sb.append(';')
-                                val ix = (p.x * 1000).toInt()
-                                val iy = (p.y * 1000).toInt()
-                                val ip = (p.pressure * 100).toInt()
-                                sb.append(ix).append(',').append(iy).append(',').append(ip)
-                            }
-                            sObj.put("pts", sb.toString())
-                            strokesArr.put(sObj)
-                        }
-
-                        val stArr = JSONArray()
-                        action.stickers.forEach { st ->
-                            val stObj = JSONObject()
-                            stObj.put("id", st.id)
-                            stObj.put("content", st.content)
-                            stObj.put("x", st.x.toDouble())
-                            stObj.put("y", st.y.toDouble())
-                            stObj.put("scale", st.scale.toDouble())
-                            stObj.put("rotation", st.rotation.toDouble())
-                            stObj.put("authorId", st.authorId)
-                            stArr.put(stObj)
-                        }
-
-                        val updates = hashMapOf<String, Any>(
-                            "strokes_json" to strokesArr.toString(),
-                            "stickers_json" to stArr.toString(),
-                            "wallpaperTheme" to action.wallpaperTheme.name,
-                            "updated_by" to myDeviceId,
-                            "updatedAt" to now,
-                            "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
-                            "draft_json" to FieldValue.delete(),
-                            "draft_sender" to FieldValue.delete()
-                        )
-                        db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
-                    } catch (e: Exception) {
-                        Log.e("PartnerSync", "Error setting full snapshot on Firestore", e)
-                        scheduleListenerReconnect(roomCode)
-                    }
-                }
+            is SyncAction.UserLayerSnapshot -> {
+                broadcastCanvasChange(
+                    myStrokes = action.strokes,
+                    myStickers = action.stickers,
+                    wallpaperTheme = action.wallpaperTheme ?: WallpaperTheme.FROSTED_GLASS,
+                    currentLayerVersion = action.layerVersion
+                )
             }
             is SyncAction.ClearAll -> {
                 scope.launch(Dispatchers.IO) {
                     try {
                         val updates = hashMapOf<String, Any>(
+                            "layers" to emptyMap<String, Any>(),
                             "strokes_json" to "[]",
                             "stickers_json" to "[]",
                             "last_action_id" to actionId,
                             "last_action_sender" to myDeviceId,
-                            "last_action_json" to SyncActionSerializer.toJson(action),
+                            "last_action_json" to SyncActionSerializer.toJson(SyncAction.ClearAll),
                             "updated_by" to myDeviceId,
                             "updatedAt" to now,
-                            "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                            "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
+                            "expiresAt" to (now + THREE_DAYS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS)),
                             "draft_json" to FieldValue.delete(),
                             "draft_sender" to FieldValue.delete()
                         )
-                        db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
+                        db.collection("rooms").document(roomCode).update(updates).addOnFailureListener {
+                            db.collection("rooms").document(roomCode).set(
+                                updates,
+                                SetOptions.merge()
+                            )
+                        }
                     } catch (e: Exception) {
-                        Log.e("PartnerSync", "Error clearing canvas on Firestore", e)
+                        Log.e("PartnerSync", "Error clearing all layers on Firestore", e)
+                        scheduleListenerReconnect(roomCode)
+                    }
+                }
+            }
+            is SyncAction.ClearUserLayer -> {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val updates = hashMapOf<String, Any>(
+                            "layers.$myDeviceId.strokes_json" to "[]",
+                            "layers.$myDeviceId.stickers_json" to "[]",
+                            "layers.$myDeviceId.version" to FieldValue.increment(1),
+                            "layers.$myDeviceId.updatedAt" to now,
+                            "last_action_id" to actionId,
+                            "last_action_sender" to myDeviceId,
+                            "last_action_json" to SyncActionSerializer.toJson(SyncAction.ClearUserLayer(myDeviceId)),
+                            "updated_by" to myDeviceId,
+                            "updatedAt" to now,
+                            "expiresAt" to (now + THREE_DAYS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS)),
+                            "draft_json" to FieldValue.delete(),
+                            "draft_sender" to FieldValue.delete()
+                        )
+                        db.collection("rooms").document(roomCode).update(updates).addOnFailureListener {
+                            db.collection("rooms").document(roomCode).set(
+                                mapOf(
+                                    "layers" to mapOf(
+                                        myDeviceId to mapOf(
+                                            "strokes_json" to "[]",
+                                            "stickers_json" to "[]",
+                                            "version" to 1L,
+                                            "updatedAt" to now
+                                        )
+                                    ),
+                                    "updated_by" to myDeviceId,
+                                    "updatedAt" to now
+                                ),
+                                SetOptions.merge()
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e("PartnerSync", "Error clearing user layer on Firestore", e)
                         scheduleListenerReconnect(roomCode)
                     }
                 }
@@ -869,8 +928,8 @@ class PartnerSyncManager(
                                 "last_action_json" to actionJson,
                                 "updated_by" to myDeviceId,
                                 "updatedAt" to now,
-                                "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                                "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS))
+                                "expiresAt" to (now + THREE_DAYS_MILLIS),
+                                "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
                             ),
                             SetOptions.merge()
                         )
@@ -883,14 +942,15 @@ class PartnerSyncManager(
     }
 
     /**
-     * Unified single atomic write for finishing a stroke and saving canvas snapshot.
-     * Prevents document write race conditions and halves cloud database requests.
+     * Unified single atomic write for finishing a stroke and saving user layer.
+     * Writes to `layers.<myDeviceId>` so each user updates only their layer without race conditions.
      */
     fun broadcastCanvasChange(
         finishedStroke: DrawingStroke? = null,
-        allStrokes: List<DrawingStroke>,
-        allStickers: List<PlacedSticker>,
-        wallpaperTheme: WallpaperTheme
+        myStrokes: List<DrawingStroke>,
+        myStickers: List<PlacedSticker>,
+        wallpaperTheme: WallpaperTheme? = null,
+        currentLayerVersion: Long = 1L
     ) {
         val db = firestore ?: return
         val roomCode = _currentRoomCode.value
@@ -904,14 +964,16 @@ class PartnerSyncManager(
         scope.launch(Dispatchers.IO) {
             try {
                 val strokesArr = JSONArray()
-                allStrokes.forEach { s ->
+                myStrokes.forEach { s ->
                     val sObj = JSONObject()
                     sObj.put("strokeId", s.id)
                     sObj.put("colorArgb", s.colorArgb)
                     sObj.put("strokeWidth", s.strokeWidth.toDouble())
                     sObj.put("brushType", s.brushType.name)
                     sObj.put("alpha", s.alpha.toDouble())
-                    sObj.put("authorId", s.authorId)
+                    sObj.put("authorId", myDeviceId)
+                    sObj.put("modifier", s.modifier.name)
+                    sObj.put("createdAt", s.createdAt)
                     val sb = StringBuilder()
                     s.points.forEachIndexed { idx, p ->
                         if (idx > 0) sb.append(';')
@@ -925,7 +987,7 @@ class PartnerSyncManager(
                 }
 
                 val stArr = JSONArray()
-                allStickers.forEach { st ->
+                myStickers.forEach { st ->
                     val stObj = JSONObject()
                     stObj.put("id", st.id)
                     stObj.put("content", st.content)
@@ -933,18 +995,28 @@ class PartnerSyncManager(
                     stObj.put("y", st.y.toDouble())
                     stObj.put("scale", st.scale.toDouble())
                     stObj.put("rotation", st.rotation.toDouble())
-                    stObj.put("authorId", st.authorId)
+                    stObj.put("authorId", myDeviceId)
+                    stObj.put("createdAt", st.createdAt)
                     stArr.put(stObj)
                 }
 
-                val updates = hashMapOf<String, Any>(
+                val myLayerData = mapOf(
                     "strokes_json" to strokesArr.toString(),
                     "stickers_json" to stArr.toString(),
-                    "wallpaperTheme" to wallpaperTheme.name,
+                    "version" to currentLayerVersion,
+                    "updatedAt" to now,
+                    "user_name" to _myName.value
+                )
+
+                val updates = hashMapOf<String, Any>(
+                    "layers.$myDeviceId" to myLayerData,
+                    "user_names.$myDeviceId" to _myName.value,
+                    "presence.$myDeviceId" to now,
+                    "presence_names.$myDeviceId" to _myName.value,
                     "updated_by" to myDeviceId,
                     "updatedAt" to now,
-                    "expiresAt" to (now + TWO_WEEKS_MILLIS),
-                    "ttl_timestamp" to Timestamp(Date(now + TWO_WEEKS_MILLIS)),
+                    "expiresAt" to (now + THREE_DAYS_MILLIS),
+                    "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS)),
                     "draft_json" to FieldValue.delete(),
                     "draft_sender" to FieldValue.delete()
                 )
@@ -952,10 +1024,25 @@ class PartnerSyncManager(
                 if (finishedStroke != null) {
                     updates["last_action_id"] = actionId
                     updates["last_action_sender"] = myDeviceId
-                    updates["last_action_json"] = SyncActionSerializer.toJson(SyncAction.StrokeFinished(finishedStroke))
+                    updates["last_action_json"] = SyncActionSerializer.toJson(SyncAction.StrokeFinished(finishedStroke.copy(authorId = myDeviceId)))
                 }
 
-                db.collection("rooms").document(roomCode).set(updates, SetOptions.merge())
+                db.collection("rooms").document(roomCode).update(updates).addOnFailureListener {
+                    // Fallback to set with merge if document doesn't exist yet
+                    db.collection("rooms").document(roomCode).set(
+                        mapOf(
+                            "layers" to mapOf(myDeviceId to myLayerData),
+                            "user_names" to mapOf(myDeviceId to _myName.value),
+                            "presence" to mapOf(myDeviceId to now),
+                            "presence_names" to mapOf(myDeviceId to _myName.value),
+                            "updated_by" to myDeviceId,
+                            "updatedAt" to now,
+                            "expiresAt" to (now + THREE_DAYS_MILLIS),
+                            "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
+                        ),
+                        SetOptions.merge()
+                    )
+                }
             } catch (e: Exception) {
                 Log.e("PartnerSync", "Error broadcasting canvas change to Firestore", e)
                 scheduleListenerReconnect(roomCode)

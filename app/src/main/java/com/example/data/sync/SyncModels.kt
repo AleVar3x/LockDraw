@@ -72,10 +72,16 @@ sealed class SyncAction {
         val requesterId: String
     ) : SyncAction()
 
-    data class FullSnapshot(
+    data class UserLayerSnapshot(
+        val authorId: String,
         val strokes: List<DrawingStroke>,
         val stickers: List<PlacedSticker>,
-        val wallpaperTheme: WallpaperTheme,
+        val layerVersion: Long,
+        val updatedAt: Long,
+        val wallpaperTheme: WallpaperTheme? = null
+    ) : SyncAction()
+
+    data class ClearUserLayer(
         val authorId: String
     ) : SyncAction()
 }
@@ -120,6 +126,7 @@ object SyncActionSerializer {
                 json.put("alpha", s.alpha.toDouble())
                 json.put("authorId", s.authorId)
                 json.put("modifier", s.modifier.name)
+                json.put("createdAt", s.createdAt)
                 val sb = StringBuilder()
                 s.points.forEachIndexed { index, p ->
                     if (index > 0) sb.append(';')
@@ -140,6 +147,7 @@ object SyncActionSerializer {
                 json.put("scale", st.scale.toDouble())
                 json.put("rotation", st.rotation.toDouble())
                 json.put("authorId", st.authorId)
+                json.put("createdAt", st.createdAt)
             }
             is SyncAction.UpdateSticker -> {
                 json.put("type", "UPDATE_STICKER")
@@ -151,6 +159,7 @@ object SyncActionSerializer {
                 json.put("scale", st.scale.toDouble())
                 json.put("rotation", st.rotation.toDouble())
                 json.put("authorId", st.authorId)
+                json.put("createdAt", st.createdAt)
             }
             is SyncAction.RemoveSticker -> {
                 json.put("type", "REMOVE_STICKER")
@@ -186,10 +195,12 @@ object SyncActionSerializer {
                 json.put("type", "REQUEST_SNAPSHOT")
                 json.put("requesterId", action.requesterId)
             }
-            is SyncAction.FullSnapshot -> {
-                json.put("type", "FULL_SNAPSHOT")
+            is SyncAction.UserLayerSnapshot -> {
+                json.put("type", "USER_LAYER_SNAPSHOT")
                 json.put("authorId", action.authorId)
-                json.put("wallpaperTheme", action.wallpaperTheme.name)
+                json.put("layerVersion", action.layerVersion)
+                json.put("updatedAt", action.updatedAt)
+                action.wallpaperTheme?.let { json.put("wallpaperTheme", it.name) }
 
                 val strokesArr = JSONArray()
                 action.strokes.forEach { s ->
@@ -201,6 +212,7 @@ object SyncActionSerializer {
                     sObj.put("alpha", s.alpha.toDouble())
                     sObj.put("authorId", s.authorId)
                     sObj.put("modifier", s.modifier.name)
+                    sObj.put("createdAt", s.createdAt)
                     val sb = StringBuilder()
                     s.points.forEachIndexed { index, p ->
                         if (index > 0) sb.append(';')
@@ -224,9 +236,14 @@ object SyncActionSerializer {
                     stObj.put("scale", st.scale.toDouble())
                     stObj.put("rotation", st.rotation.toDouble())
                     stObj.put("authorId", st.authorId)
+                    stObj.put("createdAt", st.createdAt)
                     stArr.put(stObj)
                 }
                 json.put("stickers", stArr)
+            }
+            is SyncAction.ClearUserLayer -> {
+                json.put("type", "CLEAR_USER_LAYER")
+                json.put("authorId", action.authorId)
             }
         }
         return json.toString()
@@ -273,9 +290,11 @@ object SyncActionSerializer {
                         requesterId = json.optString("requesterId", "")
                     )
                 }
-                "FULL_SNAPSHOT" -> {
-                    val themeName = json.optString("wallpaperTheme", "FROSTED_GLASS")
-                    val theme = try { WallpaperTheme.valueOf(themeName) } catch (e: Exception) { WallpaperTheme.FROSTED_GLASS }
+                "USER_LAYER_SNAPSHOT", "FULL_SNAPSHOT" -> {
+                    val themeName = if (json.has("wallpaperTheme")) json.optString("wallpaperTheme") else null
+                    val theme = themeName?.let {
+                        try { WallpaperTheme.valueOf(it) } catch (e: Exception) { null }
+                    }
                     val strokesArr = json.optJSONArray("strokes") ?: JSONArray()
                     val strokesList = mutableListOf<DrawingStroke>()
                     for (i in 0 until strokesArr.length()) {
@@ -291,7 +310,8 @@ object SyncActionSerializer {
                                 brushType = try { BrushType.valueOf(sObj.optString("brushType", "PEN")) } catch (e: Exception) { BrushType.PEN },
                                 authorId = sObj.optString("authorId", "partner"),
                                 alpha = sObj.optDouble("alpha", 1.0).toFloat(),
-                                modifier = mod
+                                modifier = mod,
+                                createdAt = sObj.optLong("createdAt", sObj.optLong("ts", System.currentTimeMillis()))
                             )
                         )
                     }
@@ -308,15 +328,23 @@ object SyncActionSerializer {
                                 y = stObj.getDouble("y").toFloat(),
                                 scale = stObj.optDouble("scale", 1.0).toFloat(),
                                 rotation = stObj.optDouble("rotation", 0.0).toFloat(),
-                                authorId = stObj.optString("authorId", "partner")
+                                authorId = stObj.optString("authorId", "partner"),
+                                createdAt = stObj.optLong("createdAt", stObj.optLong("ts", System.currentTimeMillis()))
                             )
                         )
                     }
 
-                    SyncAction.FullSnapshot(
+                    SyncAction.UserLayerSnapshot(
+                        authorId = json.optString("authorId", "partner"),
                         strokes = strokesList,
                         stickers = stickersList,
-                        wallpaperTheme = theme,
+                        layerVersion = json.optLong("layerVersion", 1L),
+                        updatedAt = json.optLong("updatedAt", System.currentTimeMillis()),
+                        wallpaperTheme = theme
+                    )
+                }
+                "CLEAR_USER_LAYER" -> {
+                    SyncAction.ClearUserLayer(
                         authorId = json.optString("authorId", "partner")
                     )
                 }
@@ -353,7 +381,8 @@ object SyncActionSerializer {
                         brushType = BrushType.valueOf(json.optString("brushType", "PEN")),
                         authorId = json.optString("authorId", "partner"),
                         alpha = json.optDouble("alpha", 1.0).toFloat(),
-                        modifier = mod
+                        modifier = mod,
+                        createdAt = json.optLong("createdAt", json.optLong("ts", System.currentTimeMillis()))
                     )
                     SyncAction.StrokeFinished(stroke)
                 }
@@ -365,7 +394,8 @@ object SyncActionSerializer {
                         y = json.getDouble("y").toFloat(),
                         scale = json.optDouble("scale", 1.0).toFloat(),
                         rotation = json.optDouble("rotation", 0.0).toFloat(),
-                        authorId = json.optString("authorId", "partner")
+                        authorId = json.optString("authorId", "partner"),
+                        createdAt = json.optLong("createdAt", json.optLong("ts", System.currentTimeMillis()))
                     )
                     SyncAction.PlaceSticker(sticker)
                 }
@@ -377,7 +407,8 @@ object SyncActionSerializer {
                         y = json.getDouble("y").toFloat(),
                         scale = json.optDouble("scale", 1.0).toFloat(),
                         rotation = json.optDouble("rotation", 0.0).toFloat(),
-                        authorId = json.optString("authorId", "partner")
+                        authorId = json.optString("authorId", "partner"),
+                        createdAt = json.optLong("createdAt", json.optLong("ts", System.currentTimeMillis()))
                     )
                     SyncAction.UpdateSticker(sticker)
                 }

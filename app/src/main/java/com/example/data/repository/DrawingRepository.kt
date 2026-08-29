@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -23,13 +24,13 @@ import com.example.data.sync.PartnerSyncManager
 import com.example.data.sync.SyncAction
 import com.example.util.NotificationHelper
 import com.example.util.WallpaperHelper
-import com.example.util.WallpaperTarget
 import com.example.widget.PartnerDrawingWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,18 +115,9 @@ class DrawingRepository private constructor(private val application: Application
     private val _lockscreenConfig = MutableStateFlow(LockscreenConfig(wallpaperTheme = WallpaperTheme.FROSTED_GLASS))
     val lockscreenConfig: StateFlow<LockscreenConfig> = _lockscreenConfig.asStateFlow()
 
-    private val _isLockscreenOverlayVisible = MutableStateFlow(true)
-    val isLockscreenOverlayVisible: StateFlow<Boolean> = _isLockscreenOverlayVisible.asStateFlow()
-
-    private val _isSimulatorOpen = MutableStateFlow(false)
-    val isSimulatorOpen: StateFlow<Boolean> = _isSimulatorOpen.asStateFlow()
-
     // Floating background mode state
     private val _isFloatingServiceActive = MutableStateFlow(false)
     val isFloatingServiceActive: StateFlow<Boolean> = _isFloatingServiceActive.asStateFlow()
-
-    private val _autoUpdateRealWallpaper = MutableStateFlow(prefs.getBoolean("auto_update_wallpaper", true))
-    val autoUpdateRealWallpaper: StateFlow<Boolean> = _autoUpdateRealWallpaper.asStateFlow()
 
     // Partner reaction floating indicators
     private val _floatingReactions = MutableStateFlow<List<FloatingHeartReaction>>(emptyList())
@@ -172,6 +164,43 @@ class DrawingRepository private constructor(private val application: Application
         val updated = listOf(sticker) + _customStickers.value.filter { it.id != sticker.id }
         _customStickers.value = updated
         saveCustomStickersToPrefs(updated)
+    }
+
+    fun importStickerFromUri(uri: Uri, context: Context, name: String = "Sticker WhatsApp"): String? {
+        return try {
+            val stickersDir = java.io.File(context.filesDir, "stickers").apply { mkdirs() }
+            val targetFile = java.io.File(stickersDir, "sticker_wa_${System.currentTimeMillis()}.png")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            val path = targetFile.absolutePath
+            val customSticker = CustomStickerItem(
+                title = name,
+                emoji = "💬",
+                imageUri = path,
+                isDoodle = false
+            )
+            addCustomSticker(customSticker)
+            path
+        } catch (e: Exception) {
+            Log.e("DrawingRepository", "Error importing sticker from uri", e)
+            null
+        }
+    }
+
+    fun importStickerFromText(text: String) {
+        if (text.isNotBlank()) {
+            val customSticker = CustomStickerItem(
+                title = text.take(30),
+                emoji = "💬",
+                backgroundColorArgb = 0xFF25D366,
+                textColorArgb = 0xFFFFFFFF,
+                isDoodle = false
+            )
+            addCustomSticker(customSticker)
+        }
     }
 
     fun deleteCustomSticker(id: String) {
@@ -250,9 +279,52 @@ class DrawingRepository private constructor(private val application: Application
         _isFloatingServiceActive.value = active
     }
 
-    fun setAutoUpdateRealWallpaper(enabled: Boolean) {
-        _autoUpdateRealWallpaper.value = enabled
-        prefs.edit().putBoolean("auto_update_wallpaper", enabled).apply()
+    private var partnerStrokeReplayJob: Job? = null
+    private var pendingReplayStroke: DrawingStroke? = null
+
+    private fun replayPartnerStroke(stroke: DrawingStroke) {
+        pendingReplayStroke?.let { prev ->
+            if (_strokes.value.none { it.id == prev.id }) {
+                _strokes.value = _strokes.value + prev
+            }
+        }
+        partnerStrokeReplayJob?.cancel()
+        pendingReplayStroke = stroke
+
+        if (stroke.points.size <= 2) {
+            _partnerDraftStroke.value = null
+            if (_strokes.value.none { it.id == stroke.id }) {
+                _strokes.value = _strokes.value + stroke
+            }
+            pendingReplayStroke = null
+            persistCurrentState()
+            handlePartnerUpdatedDrawing("ha appena disegnato sulla tua schermata! 🎨")
+            return
+        }
+
+        partnerStrokeReplayJob = scope.launch(Dispatchers.Default) {
+            val totalPoints = stroke.points.size
+            val totalDurationMs = (totalPoints * 8L).coerceIn(160L, 420L)
+            val frameIntervalMs = 16L
+            val totalFrames = (totalDurationMs / frameIntervalMs).coerceAtLeast(4)
+            val pointsPerFrame = (totalPoints.toFloat() / totalFrames).coerceAtLeast(1f)
+
+            var currentPointCount = 1
+            while (currentPointCount <= totalPoints && isActive) {
+                val visiblePoints = stroke.points.take(currentPointCount)
+                _partnerDraftStroke.value = stroke.copy(points = visiblePoints)
+                delay(frameIntervalMs)
+                currentPointCount = (currentPointCount + pointsPerFrame.toInt().coerceAtLeast(1)).coerceAtMost(totalPoints + 1)
+            }
+
+            _partnerDraftStroke.value = null
+            if (_strokes.value.none { it.id == stroke.id }) {
+                _strokes.value = _strokes.value + stroke
+            }
+            pendingReplayStroke = null
+            persistCurrentState()
+            handlePartnerUpdatedDrawing("ha appena disegnato sulla tua schermata! 🎨")
+        }
     }
 
     private fun listenToIncomingSyncActions() {
@@ -267,7 +339,8 @@ class DrawingRepository private constructor(private val application: Application
                             strokeWidth = action.strokeWidth,
                             brushType = action.brushType,
                             authorId = action.authorId,
-                            alpha = action.alpha
+                            alpha = action.alpha,
+                            modifier = action.modifier
                         )
                         _partnerDraftStroke.value = stroke
                     }
@@ -284,24 +357,19 @@ class DrawingRepository private constructor(private val application: Application
                         }
                     }
                     is SyncAction.StrokeFinished -> {
-                        _partnerDraftStroke.value = null
                         if (action.stroke.brushType == BrushType.ERASER) {
+                            _partnerDraftStroke.value = null
                             applyEraserPoints(action.stroke.points, action.stroke.strokeWidth)
+                            persistCurrentState()
+                            handlePartnerUpdatedDrawing(null)
+                        } else if (action.stroke.authorId != syncManager.myDeviceId) {
+                            replayPartnerStroke(action.stroke)
                         } else {
                             val existingIndex = _strokes.value.indexOfFirst { it.id == action.stroke.id }
-                            if (existingIndex >= 0) {
-                                val list = _strokes.value.toMutableList()
-                                list[existingIndex] = action.stroke
-                                _strokes.value = list
-                            } else {
+                            if (existingIndex < 0) {
                                 _strokes.value = _strokes.value + action.stroke
+                                persistCurrentState()
                             }
-                        }
-                        persistCurrentState()
-                        if (action.stroke.authorId != syncManager.myDeviceId && syncManager.isMatched.value && action.stroke.points.isNotEmpty()) {
-                            handlePartnerUpdatedDrawing("ha appena disegnato sulla tua schermata! 🎨")
-                        } else {
-                            handlePartnerUpdatedDrawing(null)
                         }
                     }
                     is SyncAction.PlaceSticker -> {
@@ -327,6 +395,20 @@ class DrawingRepository private constructor(private val application: Application
                         persistCurrentState()
                         handlePartnerUpdatedDrawing(null)
                     }
+                    is SyncAction.ClearUserLayer -> {
+                        if (action.authorId == syncManager.myDeviceId) {
+                            saveSnapshotForUndo()
+                            _strokes.value = _strokes.value.filter { it.authorId != syncManager.myDeviceId }
+                            _placedStickers.value = _placedStickers.value.filter { it.authorId != syncManager.myDeviceId }
+                        } else {
+                            // Partner cleared their layer
+                            _strokes.value = _strokes.value.filter { it.authorId != action.authorId && it.authorId != "partner" }
+                            _placedStickers.value = _placedStickers.value.filter { it.authorId != action.authorId && it.authorId != "partner" }
+                        }
+                        _partnerDraftStroke.value = null
+                        persistCurrentState()
+                        handlePartnerUpdatedDrawing(null)
+                    }
                     is SyncAction.ClearAll -> {
                         saveSnapshotForUndo()
                         _strokes.value = emptyList()
@@ -336,8 +418,10 @@ class DrawingRepository private constructor(private val application: Application
                         handlePartnerUpdatedDrawing(null)
                     }
                     is SyncAction.Undo -> {
-                        if (_strokes.value.isNotEmpty()) {
-                            _strokes.value = _strokes.value.dropLast(1)
+                        val authorStrokes = _strokes.value.filter { it.authorId == action.authorId || (action.authorId != syncManager.myDeviceId && it.authorId == "partner") }
+                        if (authorStrokes.isNotEmpty()) {
+                            val lastId = authorStrokes.last().id
+                            _strokes.value = _strokes.value.filter { it.id != lastId }
                             persistCurrentState()
                             handlePartnerUpdatedDrawing(null)
                         }
@@ -365,22 +449,35 @@ class DrawingRepository private constructor(private val application: Application
                     }
                     is SyncAction.RequestSnapshot -> {
                         // Partner just joined and requested current canvas state
-                        if (_strokes.value.isNotEmpty() || _placedStickers.value.isNotEmpty()) {
-                            syncManager.broadcastAction(
-                                SyncAction.FullSnapshot(
-                                    strokes = _strokes.value,
-                                    stickers = _placedStickers.value,
-                                    wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
-                                    authorId = syncManager.myDeviceId
-                                )
+                        val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+                        val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
+                        if (myStrokes.isNotEmpty() || myStickers.isNotEmpty()) {
+                            syncManager.broadcastCanvasChange(
+                                finishedStroke = null,
+                                myStrokes = myStrokes,
+                                myStickers = myStickers,
+                                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
                             )
                         }
                     }
-                    is SyncAction.FullSnapshot -> {
-                        // Received complete canvas snapshot from partner (including after erasing or on initial sync)
-                        _strokes.value = action.strokes
-                        _placedStickers.value = action.stickers
-                        _lockscreenConfig.value = _lockscreenConfig.value.copy(wallpaperTheme = action.wallpaperTheme)
+                    is SyncAction.UserLayerSnapshot -> {
+                        // Conflict-free multi-layer update:
+                        // Replace only the remote author's layer while strictly keeping local user's layer intact!
+                        val myDeviceId = syncManager.myDeviceId
+                        val remoteAuthorId = action.authorId
+
+                        val keptStrokes = _strokes.value.filter { it.authorId != remoteAuthorId && (remoteAuthorId != "partner" || it.authorId == myDeviceId) }
+                        val keptStickers = _placedStickers.value.filter { it.authorId != remoteAuthorId && (remoteAuthorId != "partner" || it.authorId == myDeviceId) }
+
+                        // Standardize incoming layer authorId
+                        val sanitizedRemoteStrokes = action.strokes.map { if (it.authorId.isBlank()) it.copy(authorId = remoteAuthorId) else it }
+                        val sanitizedRemoteStickers = action.stickers.map { if (it.authorId.isBlank()) it.copy(authorId = remoteAuthorId) else it }
+
+                        _strokes.value = keptStrokes + sanitizedRemoteStrokes
+                        _placedStickers.value = keptStickers + sanitizedRemoteStickers
+                        action.wallpaperTheme?.let {
+                            _lockscreenConfig.value = _lockscreenConfig.value.copy(wallpaperTheme = it)
+                        }
                         persistCurrentState()
                         handlePartnerUpdatedDrawing(null)
                     }
@@ -415,7 +512,6 @@ class DrawingRepository private constructor(private val application: Application
     }
 
     fun startDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
-        syncManager.ensureActiveConnection()
         saveSnapshotForUndo()
         val startPoint = DrawingPoint(normalizedX, normalizedY, pressure)
         val stroke = DrawingStroke(
@@ -433,24 +529,19 @@ class DrawingRepository private constructor(private val application: Application
         if (stroke.brushType == BrushType.ERASER) {
             applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value)
         }
-
-        syncManager.broadcastAction(
-            SyncAction.StrokeBegin(
-                strokeId = stroke.id,
-                x = normalizedX,
-                y = normalizedY,
-                colorArgb = stroke.colorArgb,
-                strokeWidth = stroke.strokeWidth,
-                brushType = stroke.brushType,
-                alpha = stroke.alpha,
-                authorId = syncManager.myDeviceId,
-                modifier = stroke.modifier
-            )
-        )
     }
 
     fun continueDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
         val current = _currentDraftStroke.value ?: return
+        val lastPt = current.points.lastOrNull()
+        if (lastPt != null) {
+            val dx = normalizedX - lastPt.x
+            val dy = normalizedY - lastPt.y
+            // Discard negligible micro-jitter delta (< 1.5px on 1080p screen) for cleaner paths
+            if (dx * dx + dy * dy < 0.000002f) {
+                return
+            }
+        }
         val newPoint = DrawingPoint(normalizedX, normalizedY, pressure)
         val updatedPoints = current.points + newPoint
         val updatedStroke = current.copy(points = updatedPoints)
@@ -458,23 +549,6 @@ class DrawingRepository private constructor(private val application: Application
 
         if (current.brushType == BrushType.ERASER) {
             applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value)
-        }
-
-        if (updatedPoints.size % 2 == 0) {
-            syncManager.broadcastAction(
-                SyncAction.StrokePoints(
-                    strokeId = current.id,
-                    points = updatedPoints,
-                    authorId = syncManager.myDeviceId
-                )
-            )
-            syncManager.broadcastAction(
-                SyncAction.CursorMove(
-                    x = normalizedX,
-                    y = normalizedY,
-                    sender = syncManager.myDeviceId
-                )
-            )
         }
     }
 
@@ -489,10 +563,13 @@ class DrawingRepository private constructor(private val application: Application
         }
         _currentDraftStroke.value = null
 
+        val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+        val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
+
         syncManager.broadcastCanvasChange(
-            finishedStroke = finalStroke,
-            allStrokes = _strokes.value,
-            allStickers = _placedStickers.value,
+            finishedStroke = if (!isEraser) finalStroke else null,
+            myStrokes = myStrokes,
+            myStickers = myStickers,
             wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
         )
         redoHistory.clear()
@@ -601,10 +678,12 @@ class DrawingRepository private constructor(private val application: Application
         _placedStickers.value = _placedStickers.value + sticker
         _selectedStickerId.value = sticker.id
 
+        val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+        val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
         syncManager.broadcastCanvasChange(
             finishedStroke = null,
-            allStrokes = _strokes.value,
-            allStickers = _placedStickers.value,
+            myStrokes = myStrokes,
+            myStickers = myStickers,
             wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
         )
         persistCurrentState()
@@ -617,10 +696,12 @@ class DrawingRepository private constructor(private val application: Application
         stickerSyncJob?.cancel()
         stickerSyncJob = scope.launch {
             delay(150)
+            val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+            val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
             syncManager.broadcastCanvasChange(
                 finishedStroke = null,
-                allStrokes = _strokes.value,
-                allStickers = _placedStickers.value,
+                myStrokes = myStrokes,
+                myStickers = myStickers,
                 wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
             )
             persistCurrentState()
@@ -670,10 +751,12 @@ class DrawingRepository private constructor(private val application: Application
         saveSnapshotForUndo()
         _placedStickers.value = _placedStickers.value.filter { it.id != id }
         if (_selectedStickerId.value == id) _selectedStickerId.value = null
+        val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+        val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
         syncManager.broadcastCanvasChange(
             finishedStroke = null,
-            allStrokes = _strokes.value,
-            allStickers = _placedStickers.value,
+            myStrokes = myStrokes,
+            myStickers = myStickers,
             wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
         )
         persistCurrentState()
@@ -683,9 +766,11 @@ class DrawingRepository private constructor(private val application: Application
     fun clearAllCanvas() {
         if (_strokes.value.isEmpty() && _placedStickers.value.isEmpty()) return
         saveSnapshotForUndo()
+        // Clear all strokes and stickers across all layers
         _strokes.value = emptyList()
         _placedStickers.value = emptyList()
         _selectedStickerId.value = null
+        _partnerDraftStroke.value = null
         syncManager.broadcastAction(SyncAction.ClearAll)
         persistCurrentState()
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
@@ -697,25 +782,37 @@ class DrawingRepository private constructor(private val application: Application
             redoHistory.add(CanvasSnapshot(_strokes.value, _placedStickers.value))
             _strokes.value = lastState.strokes
             _placedStickers.value = lastState.stickers
+            val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+            val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
             syncManager.broadcastCanvasChange(
                 finishedStroke = null,
-                allStrokes = _strokes.value,
-                allStickers = _placedStickers.value,
+                myStrokes = myStrokes,
+                myStickers = myStickers,
                 wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
             )
             persistCurrentState()
             PartnerDrawingWidgetProvider.updateAllWidgets(application)
         } else if (_strokes.value.isNotEmpty() || _placedStickers.value.isNotEmpty()) {
             redoHistory.add(CanvasSnapshot(_strokes.value, _placedStickers.value))
-            if (_strokes.value.isNotEmpty()) {
+            val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+            if (myStrokes.isNotEmpty()) {
+                val lastId = myStrokes.last().id
+                _strokes.value = _strokes.value.filter { it.id != lastId }
+            } else if (_placedStickers.value.any { it.authorId == syncManager.myDeviceId }) {
+                val myStickersList = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
+                val lastStickerId = myStickersList.last().id
+                _placedStickers.value = _placedStickers.value.filter { it.id != lastStickerId }
+            } else if (_strokes.value.isNotEmpty()) {
                 _strokes.value = _strokes.value.dropLast(1)
             } else if (_placedStickers.value.isNotEmpty()) {
                 _placedStickers.value = _placedStickers.value.dropLast(1)
             }
+            val remainingMyStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+            val remainingMyStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
             syncManager.broadcastCanvasChange(
                 finishedStroke = null,
-                allStrokes = _strokes.value,
-                allStickers = _placedStickers.value,
+                myStrokes = remainingMyStrokes,
+                myStickers = remainingMyStickers,
                 wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
             )
             persistCurrentState()
@@ -758,14 +855,6 @@ class DrawingRepository private constructor(private val application: Application
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
     }
 
-    fun toggleLockscreenOverlay() {
-        _isLockscreenOverlayVisible.value = !_isLockscreenOverlayVisible.value
-    }
-
-    fun setSimulatorOpen(open: Boolean) {
-        _isSimulatorOpen.value = open
-    }
-
     fun sendHeartReaction(emoji: String = "💖", x: Float = 0.5f, y: Float = 0.5f) {
         val reaction = FloatingHeartReaction(
             x = x,
@@ -805,20 +894,6 @@ class DrawingRepository private constructor(private val application: Application
 
     fun triggerPartnerSimulatedSticker() {
         syncManager.triggerPartnerSimulatedSticker()
-    }
-
-    suspend fun applyToDeviceWallpaper(target: WallpaperTarget): Boolean {
-        val success = WallpaperHelper.applyToDeviceWallpaper(
-            context = application,
-            strokes = _strokes.value,
-            stickers = _placedStickers.value,
-            config = _lockscreenConfig.value,
-            target = target
-        )
-        if (success) {
-            PartnerDrawingWidgetProvider.updateAllWidgets(application)
-        }
-        return success
     }
 
     private fun persistCurrentState() {

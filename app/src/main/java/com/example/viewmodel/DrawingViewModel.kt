@@ -21,7 +21,6 @@ import com.example.data.sync.ConnectionStatus
 import com.example.data.sync.PartnerPresence
 import com.example.data.sync.PartnerSyncManager
 import com.example.service.FloatingDrawingService
-import com.example.util.WallpaperTarget
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -49,12 +48,9 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val partnerNotificationsEnabled: StateFlow<Boolean> = repository.partnerNotificationsEnabled
     val customStickers: StateFlow<List<com.example.data.model.CustomStickerItem>> = repository.customStickers
 
-    // Lockscreen & Floating state
+    // Floating state
     val lockscreenConfig: StateFlow<LockscreenConfig> = repository.lockscreenConfig
-    val isLockscreenOverlayVisible: StateFlow<Boolean> = repository.isLockscreenOverlayVisible
-    val isSimulatorOpen: StateFlow<Boolean> = repository.isSimulatorOpen
     val isFloatingServiceActive: StateFlow<Boolean> = repository.isFloatingServiceActive
-    val autoUpdateRealWallpaper: StateFlow<Boolean> = repository.autoUpdateRealWallpaper
 
     val floatingReactions: StateFlow<List<FloatingHeartReaction>> = repository.floatingReactions
     val isMyDrawingsTransparent: StateFlow<Boolean> = repository.isMyDrawingsTransparent
@@ -143,6 +139,14 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
         repository.addSticker(emojiOrText, x, y)
     }
 
+    fun importStickerFromUri(uri: Uri, context: Context, name: String = "WhatsApp Sticker"): String? {
+        return repository.importStickerFromUri(uri, context, name)
+    }
+
+    fun importStickerFromText(text: String) {
+        repository.importStickerFromText(text)
+    }
+
     fun updateStickerPosition(stickerId: String, newX: Float, newY: Float) {
         repository.updateStickerPosition(stickerId, newX, newY)
     }
@@ -183,14 +187,6 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
         repository.setCustomWallpaperUri(uriString)
     }
 
-    fun toggleLockscreenOverlay() {
-        repository.toggleLockscreenOverlay()
-    }
-
-    fun setSimulatorOpen(open: Boolean) {
-        repository.setSimulatorOpen(open)
-    }
-
     fun sendHeartReaction(emoji: String = "💖", x: Float = 0.5f, y: Float = 0.5f) {
         repository.sendHeartReaction(emoji, x, y)
     }
@@ -205,17 +201,6 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
 
     fun triggerPartnerSimulatedSticker() {
         repository.triggerPartnerSimulatedSticker()
-    }
-
-    fun setAutoUpdateRealWallpaper(enabled: Boolean) {
-        repository.setAutoUpdateRealWallpaper(enabled)
-    }
-
-    fun applyToRealLockscreen(context: Context, target: WallpaperTarget = WallpaperTarget.LOCKSCREEN, onResult: (Boolean) -> Unit) {
-        viewModelScope.launch {
-            val success = repository.applyToDeviceWallpaper(target)
-            onResult(success)
-        }
     }
 
     fun canDrawOverlays(context: Context): Boolean {

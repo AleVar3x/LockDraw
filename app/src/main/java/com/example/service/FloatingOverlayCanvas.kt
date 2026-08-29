@@ -55,7 +55,6 @@ import com.example.data.model.BrushType
 import com.example.data.repository.DrawingRepository
 import com.example.ui.components.BrushPaletteBar
 import com.example.ui.components.ColorPickerBar
-import com.example.ui.components.CustomStickerCreatorDialog
 import com.example.ui.components.DrawingCanvas
 import com.example.ui.components.PaywallDialog
 import com.example.ui.components.StickerBottomSheet
@@ -85,11 +84,12 @@ fun FloatingOverlayCanvas(
     val isPremiumUnlocked by repository.isPremiumUnlocked.collectAsState()
     val customStickers by repository.customStickers.collectAsState()
     val isMyDrawingsTransparent by repository.isMyDrawingsTransparent.collectAsState()
+    val myName by repository.myName.collectAsState()
+    val partnerCustomName by repository.partnerCustomName.collectAsState()
 
     var showStickersSheet by remember { mutableStateOf(false) }
     var showClearConfirmation by remember { mutableStateOf(false) }
     var showPaywallDialog by remember { mutableStateOf(false) }
-    var showCustomStickerCreator by remember { mutableStateOf(false) }
     var isPaletteCollapsed by remember { mutableStateOf(false) }
 
     var bubbleX by remember { mutableStateOf(initialBubbleX.toFloat()) }
@@ -100,6 +100,43 @@ fun FloatingOverlayCanvas(
             .fillMaxSize()
             .background(Color(0x01000000))
     ) {
+        // 0. Top Partner Identity & Connectivity Badge
+        Surface(
+            color = Color(0xD9121324),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.2.dp, if (partnerPresence.isOnline) Color(0xFF00E676) else Color(0x44FFFFFF)),
+            shadowElevation = 6.dp,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 40.dp, end = 16.dp)
+                .testTag("partner_identity_badge")
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (partnerPresence.isOnline) Color(0xFF00E676) else Color(0xFF9E9E9E))
+                )
+                Text(
+                    text = "👤 ${partnerPresence.partnerName.ifBlank { "Partner" }}",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                if (partnerPresence.isDrawing) {
+                    Text(
+                        text = "✏️",
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
         // 1. Transparent Drawing Canvas directly over the real device screen
         DrawingCanvas(
             strokes = strokes,
@@ -110,6 +147,9 @@ fun FloatingOverlayCanvas(
             partnerPresence = partnerPresence,
             floatingReactions = floatingReactions,
             isMyDrawingsTransparent = isMyDrawingsTransparent,
+            myDeviceId = repository.syncManager.myDeviceId,
+            myName = myName,
+            partnerName = partnerPresence.partnerName.ifBlank { partnerCustomName.ifBlank { "Partner" } },
             onStartDraw = { x, y ->
                 repository.startDrawing(x, y)
             },
@@ -181,54 +221,86 @@ fun FloatingOverlayCanvas(
                 .fillMaxWidth(),
             contentAlignment = Alignment.BottomCenter
         ) {
-            // Collapsed slim handle: allows drawing completely down to the bottom of the screen
+            // Collapsed slim handle: allows drawing completely down to the bottom of the screen with fixed quick clear button
             AnimatedVisibility(
                 visible = isPaletteCollapsed,
                 enter = fadeIn() + slideInVertically { it },
                 exit = fadeOut() + slideOutVertically { it }
             ) {
-                Surface(
-                    color = Color(0xE6141524),
-                    shape = RoundedCornerShape(24.dp),
-                    border = BorderStroke(1.2.dp, Color(0x66D0BCFF)),
-                    shadowElevation = 12.dp,
+                Row(
                     modifier = Modifier
-                        .padding(bottom = 12.dp)
-                        .pointerInput(Unit) {
-                            detectVerticalDragGestures { _, dragAmount ->
-                                if (dragAmount < -8f) {
-                                    isPaletteCollapsed = false
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Placeholder for left balance
+                    Spacer(modifier = Modifier.size(46.dp))
+
+                    // Center Swipe-Up Handle
+                    Surface(
+                        color = Color(0xE6141524),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.2.dp, Color(0x66D0BCFF)),
+                        shadowElevation = 12.dp,
+                        modifier = Modifier
+                            .pointerInput(Unit) {
+                                detectVerticalDragGestures { _, dragAmount ->
+                                    if (dragAmount < -8f) {
+                                        isPaletteCollapsed = false
+                                    }
                                 }
                             }
-                        }
-                        .clickable { isPaletteCollapsed = false }
-                        .testTag("collapsed_palette_handle")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .clickable { isPaletteCollapsed = false }
+                            .testTag("collapsed_palette_handle")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowUp,
-                            contentDescription = "Swipe up per aprire la tavolozza",
-                            tint = Color(0xFFD0BCFF),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "Swipe up per aprire tavolozza",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White
-                        )
-                        // Live active color & brush indicator preview
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .background(selectedColor)
-                                .border(1.dp, Color(0x99FFFFFF), CircleShape)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowUp,
+                                contentDescription = "Swipe up per aprire la tavolozza",
+                                tint = Color(0xFFD0BCFF),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Swipe up tavolozza",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                            // Live active color & brush indicator preview
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(selectedColor)
+                                    .border(1.dp, Color(0x99FFFFFF), CircleShape)
+                            )
+                        }
+                    }
+
+                    // Fixed Rightmost Quick Clear All Button
+                    Surface(
+                        color = Color(0xFFC62828),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.5.dp, Color(0xFFFF8A80)),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clickable { showClearConfirmation = true }
+                            .testTag("collapsed_clear_all_btn")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = "Cancella tutto da tutti i layer",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -313,25 +385,16 @@ fun FloatingOverlayCanvas(
                     repository.addSticker(emojiOrText)
                     showStickersSheet = false
                 },
-                onOpenCustomStickerCreator = {
-                    showStickersSheet = false
-                    showCustomStickerCreator = true
-                },
                 onDeleteCustomSticker = { repository.deleteCustomSticker(it) },
+                onImportStickerUri = { uri ->
+                    val path = repository.importStickerFromUri(uri, context, "Sticker WhatsApp")
+                    if (path != null) {
+                        android.widget.Toast.makeText(context, "Sticker salvato con successo!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
                 onOpenPaywall = {
                     showStickersSheet = false
                     showPaywallDialog = true
-                }
-            )
-        }
-
-        // Custom Sticker Creator Dialog
-        if (showCustomStickerCreator) {
-            CustomStickerCreatorDialog(
-                onDismiss = { showCustomStickerCreator = false },
-                onCreateSticker = { createdSticker ->
-                    repository.addCustomSticker(createdSticker)
-                    showCustomStickerCreator = false
                 }
             )
         }

@@ -95,10 +95,15 @@ import com.example.data.sync.ConnectionStatus
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import com.example.ui.components.PaywallDialog
 import com.example.ui.components.DrawingCanvas
+import com.example.ui.components.StickerBottomSheet
+import com.example.ui.components.openWhatsAppDirectly
 import com.example.util.QrCodeView
 import com.example.viewmodel.DrawingViewModel
 import kotlinx.coroutines.launch
@@ -132,6 +137,7 @@ fun MainDrawingScreen(
 
     val isPremiumUnlocked by viewModel.isPremiumUnlocked.collectAsState()
     val partnerNotificationsEnabled by viewModel.partnerNotificationsEnabled.collectAsState()
+    val customStickers by viewModel.customStickers.collectAsState()
 
     val selectedBrushType by viewModel.selectedBrushType.collectAsState()
     val selectedColor by viewModel.selectedColor.collectAsState()
@@ -143,6 +149,7 @@ fun MainDrawingScreen(
     var showQrDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
     var showPaywallDialog by remember { mutableStateOf(false) }
+    var showStickersSheet by remember { mutableStateOf(false) }
     var hasOverlayPermission by remember { mutableStateOf(viewModel.canDrawOverlays(context)) }
 
     val drawingColors = remember {
@@ -915,7 +922,7 @@ fun MainDrawingScreen(
                 }
             }
 
-            // 4. IMPOSTAZIONE NOMI (Il tuo nome & Nome del partner sulla matita)
+            // 4. IMPOSTAZIONE NOME OPERATORE & IDENTITÀ PARTNER
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xD9161726)),
                 shape = RoundedCornerShape(24.dp),
@@ -944,23 +951,23 @@ fun MainDrawingScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Nomi & Identità Disegno",
+                                text = "Nome Operatore & Partner",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp
                             )
                             Text(
-                                text = "Personalizza il nome visualizzato sulla matita in tempo reale",
+                                text = "Ogni partner imposta il proprio nome, sincronizzato via Firebase",
                                 color = Color(0xFF9E9DB5),
                                 fontSize = 12.sp
                             )
                         }
                     }
 
-                    // Il tuo nome
+                    // Il tuo nome operatore
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "Il tuo nome (trasmesso al partner)",
+                            text = "Il tuo nome (visibile al partner)",
                             color = Color(0xFFD0BCFF),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
@@ -971,7 +978,7 @@ fun MainDrawingScreen(
                                 myNameInput = it
                                 viewModel.setMyName(it)
                             },
-                            placeholder = { Text("Es. Giulia", color = Color(0x55FFFFFF)) },
+                            placeholder = { Text("Es. Giulia / Marco", color = Color(0x55FFFFFF)) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = Color(0xFFD0BCFF),
@@ -986,63 +993,79 @@ fun MainDrawingScreen(
                         )
                     }
 
-                    // Nome del partner sulla matita
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "Nome del partner (mostrato sulla matitina ✏️)",
-                            color = Color(0xFF80DEEA),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        OutlinedTextField(
-                            value = partnerNameInput,
-                            onValueChange = {
-                                partnerNameInput = it
-                                viewModel.setPartnerCustomName(it)
-                            },
-                            placeholder = { Text(partnerPresence.partnerName.ifBlank { "Es. Amore / Luca" }, color = Color(0x55FFFFFF)) },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color(0xFF80DEEA),
-                                unfocusedBorderColor = Color(0x33FFFFFF),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedContainerColor = Color(0xFF100F1C),
-                                unfocusedContainerColor = Color(0xFF100F1C)
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("partner_name_input")
-                        )
-                    }
-
-                    // Active preview chip
+                    // Scheda Partner (Legge il nome impostato dal partner su Firebase)
                     Surface(
-                        color = Color(0xFF222038),
-                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF1C1A2E),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, Color(0x3380DEEA)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = "Anteprima cursore partner:",
-                                color = Color(0xFFB0AEC7),
-                                fontSize = 12.sp
-                            )
-                            Surface(
-                                color = Color(0x4400E5FF),
-                                shape = RoundedCornerShape(6.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = "✏️ ${partnerPresence.partnerName.ifBlank { "Partner" }}",
+                                    text = "Nome del Partner:",
                                     color = Color(0xFF80DEEA),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
+
+                                Surface(
+                                    color = if (partnerPresence.isOnline) Color(0x2200E676) else Color(0x229E9E9E),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, if (partnerPresence.isOnline) Color(0xFF00E676) else Color(0x449E9E9E))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(if (partnerPresence.isOnline) Color(0xFF00E676) else Color(0xFF9E9E9E))
+                                        )
+                                        Text(
+                                            text = if (partnerPresence.isOnline) "Online" else "Non in linea",
+                                            color = if (partnerPresence.isOnline) Color(0xFF00E676) else Color(0xFF9E9E9E),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
                             }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    color = Color(0x3300E5FF),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        text = "👤 ${partnerPresence.partnerName.ifBlank { "In attesa che il partner imposti il nome..." }}",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+
+                            Text(
+                                text = "Il nome del partner viene impostato direttamente dal suo smartphone e sincronizzato in automatico su Firebase.",
+                                color = Color(0xFF9E9DB5),
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp
+                            )
                         }
                     }
                 }
@@ -1113,7 +1136,7 @@ fun MainDrawingScreen(
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
-                                    text = "✨ Include: Pennello Ondulato, Neon Glow Pulsante, Creatore Sticker stile WhatsApp",
+                                    text = "✨ Include: Pennello Ondulato, Neon Glow Pulsante, Importazione Sticker WhatsApp illimitata & Collezione Emoji completa",
                                     color = Color(0xFFFFE082),
                                     fontSize = 12.sp,
                                     lineHeight = 16.sp
@@ -1218,6 +1241,149 @@ fun MainDrawingScreen(
                 }
             }
 
+            // 6. GESTIONE STICKER WHATSAPP & COLLEZIONE EMOJI
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xD9161E28)),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.2.dp, Color(0x5525D366)),
+                modifier = Modifier.fillMaxWidth().testTag("whatsapp_stickers_settings_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = Color(0xFF25D366),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Chat,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Sticker WhatsApp & Emoji",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    text = "${customStickers.size} sticker WhatsApp salvati",
+                                    color = Color(0xFF80E8A8),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Procedura Importazione WhatsApp
+                    Surface(
+                        color = Color(0x1F25D366),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, Color(0x4025D366)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = Color(0xFF25D366),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Come importare da WhatsApp:",
+                                    color = Color(0xFF80E8A8),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            Text(
+                                text = "1. Tocca 'Apri WhatsApp' qui sotto ed entra in una chat.\n" +
+                                       "2. Tieni premuto sullo sticker e tocca 'Condividi'.\n" +
+                                       "3. Scegli LockDraw: lo sticker verrà salvato all'istante!",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { openWhatsAppDirectly(context) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF25D366),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .testTag("main_screen_open_whatsapp_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Chat,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Apri WhatsApp",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Button(
+                            onClick = { showStickersSheet = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF7C4DFF),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1.2f)
+                                .height(44.dp)
+                                .testTag("open_all_stickers_sheet_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.EmojiEmotions,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Emoji & Sticker",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
+
             // Big Prominent Action: Disegna su Schermo Subito (Bolla Fluttuante)
             Button(
                 onClick = {
@@ -1268,6 +1434,31 @@ fun MainDrawingScreen(
                     viewModel.unlockPremium(true)
                     showPaywallDialog = false
                     Toast.makeText(context, "LockDraw VIP sbloccato a 4,99 €! 🎉", Toast.LENGTH_LONG).show()
+                }
+            )
+        }
+
+        // Sticker & Emoji Sheet Overlay
+        if (showStickersSheet) {
+            StickerBottomSheet(
+                isPremiumUnlocked = isPremiumUnlocked,
+                customStickers = customStickers,
+                onDismiss = { showStickersSheet = false },
+                onSelectSticker = { emojiOrText ->
+                    viewModel.addSticker(emojiOrText)
+                    showStickersSheet = false
+                    Toast.makeText(context, "Sticker aggiunto alla lavagna!", Toast.LENGTH_SHORT).show()
+                },
+                onDeleteCustomSticker = { viewModel.deleteCustomSticker(it) },
+                onImportStickerUri = { uri ->
+                    val path = viewModel.importStickerFromUri(uri, context, "Sticker WhatsApp")
+                    if (path != null) {
+                        Toast.makeText(context, "Sticker salvato con successo!", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onOpenPaywall = {
+                    showStickersSheet = false
+                    showPaywallDialog = true
                 }
             )
         }

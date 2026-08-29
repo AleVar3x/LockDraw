@@ -588,36 +588,52 @@ fun BrushPaletteBar(
                             color = Color.White.copy(alpha = 0.75f)
                         )
                     }
+                }
 
-                    // Clear (Cancella tutto)
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { onClearCanvas() }
+                // 3. FIXED Rightmost "Cancella Tutto" button: remains sticky on the right on scroll
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Fixed vertical divider
+                Box(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .width(1.dp)
+                        .background(Color(0x33FFFFFF))
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clickable { onClearCanvas() }
+                        .padding(horizontal = 2.dp)
+                ) {
+                    Surface(
+                        color = Color(0xFFC62828),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .size(46.dp)
+                            .testTag("clear_all_btn"),
+                        border = BorderStroke(1.5.dp, Color(0xFFFF8A80)),
+                        shadowElevation = 4.dp
                     ) {
-                        Surface(
-                            color = Color(0x40FF5252),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, Color(0x66FF5252)),
-                            modifier = Modifier
-                                .size(46.dp)
-                                .testTag("clear_all_btn")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteSweep,
-                                    contentDescription = "Cancella Tutto",
-                                    tint = Color(0xFFFF8A80),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = "Cancella Tutto da Tutti i Layer",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Cancella",
-                            fontSize = 9.sp,
-                            color = Color(0xFFFF8A80)
-                        )
                     }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Cancella",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFF8A80)
+                    )
                 }
             }
         }
