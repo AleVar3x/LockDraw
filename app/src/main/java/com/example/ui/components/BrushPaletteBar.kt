@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
@@ -79,6 +80,7 @@ val PRIMARY_BRUSH_TOOLS = listOf(
     BrushToolItem(BrushType.PENCIL, "Matita", icon = Icons.Default.Create),
     BrushToolItem(BrushType.HIGHLIGHTER, "Evidenziatore", icon = Icons.Default.Highlight),
     BrushToolItem(BrushType.NEON, "Neon Glow", icon = Icons.Default.AutoAwesome),
+    BrushToolItem(BrushType.SPRAY, "Spray", icon = Icons.Default.BlurOn, isPremium = true),
     BrushToolItem(BrushType.RAINBOW, "Arcobaleno", icon = Icons.Default.InvertColors),
     BrushToolItem(BrushType.DOTTED, "Puntini", icon = Icons.Default.MoreHoriz),
     BrushToolItem(BrushType.ERASER, "Gomma", iconResId = R.drawable.ic_eraser)
@@ -89,6 +91,7 @@ private fun getModifierIcon(modifier: StrokeModifier): ImageVector {
         StrokeModifier.NONE -> Icons.Default.Gesture
         StrokeModifier.WAVE -> Icons.Default.Waves
         StrokeModifier.PULSING -> Icons.Default.Favorite
+        StrokeModifier.SPARKLING -> Icons.Default.AutoAwesome
         StrokeModifier.DOT_FLOW -> Icons.Default.ScatterPlot
     }
 }

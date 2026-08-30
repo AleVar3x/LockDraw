@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Gesture
@@ -88,7 +89,13 @@ fun PaywallDialog(
 
     val features = listOf(
         PaywallFeature(
-            title = "Pennello Dot Flow",
+            title = "Bomboletta Spray (Flow & Sparkling)",
+            description = "Spruzzo in stile MS Paint, aerosol con particelle scintillanti e flusso animato.",
+            icon = Icons.Default.BlurOn,
+            iconTint = Color(0xFF80FFEA)
+        ),
+        PaywallFeature(
+            title = "Pennello Flow",
             description = "Puntini animati che scorrono e viaggiano fluidamente nella direzione del tratto.",
             icon = Icons.Default.ScatterPlot,
             iconTint = Color(0xFFFFD54F)
@@ -103,7 +110,7 @@ fun PaywallDialog(
             title = "Pennello Penna Ondulata",
             description = "Tratti organici a onda sinusoidale per dediche, firme e disegni unici.",
             icon = Icons.Default.Gesture,
-            iconTint = Color(0xFF80FFEA)
+            iconTint = Color(0xFFD0BCFF)
         ),
         PaywallFeature(
             title = "Pennello Pulsing",

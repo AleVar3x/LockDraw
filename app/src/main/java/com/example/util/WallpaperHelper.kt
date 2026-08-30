@@ -90,6 +90,10 @@ object WallpaperHelper {
         }
 
         when (stroke.brushType) {
+            BrushType.SPRAY, BrushType.PULSING_SPRAY -> {
+                drawSprayOnCanvas(canvas, stroke, width, height)
+                return
+            }
             BrushType.ERASER -> {
                 paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
             }
@@ -167,5 +171,60 @@ object WallpaperHelper {
         val last = smoothed.last()
         path.lineTo(last.x * width, last.y * height)
         return path
+    }
+
+    private fun drawSprayOnCanvas(canvas: Canvas, stroke: DrawingStroke, width: Int, height: Int) {
+        val pts = stroke.points
+        if (pts.isEmpty()) return
+
+        val baseRadius = (stroke.strokeWidth * (width / 400f) * 1.5f).coerceIn(12f, 65f)
+        val seed = stroke.id.hashCode().toLong()
+        val random = java.util.Random(seed)
+
+        val dotsPerStamp = (stroke.strokeWidth * 1.6f).toInt().coerceIn(18, 48)
+        val dotSizeBase = (stroke.strokeWidth * (width / 400f) * 0.12f).coerceIn(1.2f, 3.2f)
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = stroke.colorArgb
+            style = Paint.Style.FILL
+        }
+
+        val baseAlpha = (stroke.alpha * 255).toInt().coerceIn(0, 255)
+
+        for (i in pts.indices) {
+            val p0 = pts[i]
+            val x0 = p0.x * width
+            val y0 = p0.y * height
+
+            val steps = if (i > 0) {
+                val pPrev = pts[i - 1]
+                val dist = kotlin.math.hypot((p0.x - pPrev.x) * width, (p0.y - pPrev.y) * height)
+                (dist / (baseRadius * 0.40f)).toInt().coerceIn(1, 18)
+            } else 1
+
+            val pPrev = if (i > 0) pts[i - 1] else p0
+            val prevX = pPrev.x * width
+            val prevY = pPrev.y * height
+
+            for (s in 0 until steps) {
+                val t = if (steps > 1) (s + 1).toFloat() / steps else 1f
+                val cx = prevX + (x0 - prevX) * t
+                val cy = prevY + (y0 - prevY) * t
+
+                for (d in 0 until dotsPerStamp) {
+                    val angle = random.nextFloat() * (2 * Math.PI).toFloat()
+                    val rFactor = (random.nextFloat() + random.nextFloat()) / 2f
+                    val dist = rFactor * baseRadius
+                    val dotX = cx + kotlin.math.cos(angle) * dist
+                    val dotY = cy + kotlin.math.sin(angle) * dist
+
+                    val dotRadius = if (random.nextFloat() > 0.85f) dotSizeBase * 1.5f else dotSizeBase
+                    val dotAlpha = (baseAlpha * (0.45f + 0.55f * (1f - rFactor * 0.5f))).toInt().coerceIn(0, 255)
+                    paint.alpha = dotAlpha
+
+                    canvas.drawCircle(dotX, dotY, dotRadius, paint)
+                }
+            }
+        }
     }
 }

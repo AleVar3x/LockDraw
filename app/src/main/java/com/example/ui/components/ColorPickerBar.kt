@@ -45,32 +45,54 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// 18 chromatic color pairs: Row 1 has vivid/pure hues, Row 2 has matching soft/pastel/toned shades
-// Ordered strictly chromatically: Pink -> Rose -> Magenta -> Purple -> Indigo -> Blue -> Cyan -> Aqua -> Emerald -> Green -> Lime -> Gold -> Orange -> Deep Orange -> Coral/Red -> Brown/Earthy -> Slate/Gray -> White/Black
-val CHROMATIC_COLOR_PAIRS: List<Pair<Color, Color>> = listOf(
-    Pair(Color(0xFFFF007F), Color(0xFFFFB6C1)), // Hot Neon Pink / Soft Pastel Pink
-    Pair(Color(0xFFFF2A6D), Color(0xFFF8BBD0)), // Vivid Rose / Soft Rose Bubblegum
-    Pair(Color(0xFFD500F9), Color(0xFFE1BEE7)), // Hyper Magenta / Soft Lavender
-    Pair(Color(0xFF9C27B0), Color(0xFFD1C4E9)), // Vivid Purple / Pastel Lilac
-    Pair(Color(0xFF7C4DFF), Color(0xFFC5CAE9)), // Electric Violet / Soft Periwinkle
-    Pair(Color(0xFF3D5AFE), Color(0xFFBBDEFB)), // Royal Indigo / Pastel Baby Blue
-    Pair(Color(0xFF2979FF), Color(0xFF90CAF9)), // Bright Dodger Blue / Ice Blue
+// 32 chromatic color pairs (64 colors total): Starts from Red and transitions to Orange -> Yellow -> Lime -> Green -> Teal -> Cyan -> Blue -> Indigo -> Violet -> Magenta -> Pink -> Earthy -> White & Black
+// Row 1 features vivid/deep hues, Row 2 features matching soft/pastel/toned shades
+val CHROMATIC_COLOR_PAIRS_64: List<Pair<Color, Color>> = listOf(
+    // 1. Reds & Corals
+    Pair(Color(0xFFD50000), Color(0xFFFFCDD2)), // Crimson Deep Red / Soft Candy Red
+    Pair(Color(0xFFFF1744), Color(0xFFFF8A80)), // Fluorescent Red / Soft Coral Pink
+    Pair(Color(0xFFFF3D00), Color(0xFFFFAB91)), // Sunset Orange-Red / Soft Coral Salmon
+    Pair(Color(0xFFFF6D00), Color(0xFFFFCCBC)), // Radiant Deep Orange / Pastel Apricot
+    // 2. Oranges & Warm Golds
+    Pair(Color(0xFFFF9100), Color(0xFFFFE0B2)), // Vivid Tangelo Orange / Pastel Peach
+    Pair(Color(0xFFFFC107), Color(0xFFFFE082)), // Amber Warm Gold / Warm Pastel Honey
+    Pair(Color(0xFFFFD600), Color(0xFFFFF59D)), // Golden Yellow / Soft Light Yellow
+    Pair(Color(0xFFFFEA00), Color(0xFFFFF9C4)), // Neon Sun Yellow / Soft Cream Lemon
+    // 3. Yellows & Limes
+    Pair(Color(0xFFFFFF00), Color(0xFFFFFF8D)), // Pure Bright Yellow / Light Canary
+    Pair(Color(0xFFAEEA00), Color(0xFFF4FF81)), // Vibrant Olive Lime / Light Electric Yellow-Green
+    Pair(Color(0xFF76FF03), Color(0xFFCCFF90)), // Electric Laser Lime / Light Lime Pastel
+    Pair(Color(0xFF64DD17), Color(0xFFDCEDC8)), // Vivid Green Lime / Pastel Pale Lime
+    // 4. Greens & Emeralds
+    Pair(Color(0xFF00E676), Color(0xFFB9F6CA)), // Mint Emerald Green / Pastel Mint Green
+    Pair(Color(0xFF00C853), Color(0xFFC8E6C9)), // Vivid Leaf Green / Soft Spring Green
+    Pair(Color(0xFF2E7D32), Color(0xFF69F0AE)), // Forest Emerald / Light Neon Emerald
+    Pair(Color(0xFF1B5E20), Color(0xFFA7FFEB)), // Deep Dark Green / Pastel Seafoam
+    // 5. Teals & Cyans
+    Pair(Color(0xFF00897B), Color(0xFF80CBC4)), // Pine Teal / Soft Aquamarine
+    Pair(Color(0xFF00BFA5), Color(0xFFE0F7FA)), // Deep Mint Aqua / Frosted Ice Mint
+    Pair(Color(0xFF1DE9B6), Color(0xFF84FFFF)), // Bright Turquoise / Ice Aqua
     Pair(Color(0xFF00E5FF), Color(0xFFB2EBF2)), // Vivid Cyan / Pastel Aqua
-    Pair(Color(0xFF00E676), Color(0xFFB9F6CA)), // Mint Emerald / Pastel Mint Green
-    Pair(Color(0xFF00FF66), Color(0xFFC8E6C9)), // Laser Neon Green / Soft Spring Green
-    Pair(Color(0xFF76FF03), Color(0xFFDCEDC8)), // Electric Lime / Light Olive Lime
-    Pair(Color(0xFFFFEA00), Color(0xFFFFF9C4)), // Neon Sun Yellow / Pastel Cream Yellow
-    Pair(Color(0xFFFFC107), Color(0xFFFFE0B2)), // Amber Warm Gold / Pastel Peach
-    Pair(Color(0xFFFF6D00), Color(0xFFFFCCBC)), // Radiant Orange / Pastel Apricot
-    Pair(Color(0xFFFF3D00), Color(0xFFFFAB91)), // Deep Orange / Soft Coral Salmon
-    Pair(Color(0xFFFF1744), Color(0xFFFFCDD2)), // Fluorescent Red / Soft Candy Red
-    Pair(Color(0xFF8D6E63), Color(0xFFD7CCC8)), // Warm Mocha Brown / Milk Tea Cream
+    // 6. Blues & Indigos
+    Pair(Color(0xFF00B0FF), Color(0xFF80D8FF)), // Bright Azure / Sky Blue Ice
+    Pair(Color(0xFF2979FF), Color(0xFF90CAF9)), // Electric Dodger Blue / Ice Blue
+    Pair(Color(0xFF448AFF), Color(0xFFBBDEFB)), // Vivid Blue / Baby Sky Blue
+    Pair(Color(0xFF3D5AFE), Color(0xFF82B1FF)), // Royal Indigo / Soft Cerulean
+    // 7. Violets, Purples & Magentas
+    Pair(Color(0xFF651FFF), Color(0xFFB388FF)), // Deep Indigo Purple / Light Periwinkle
+    Pair(Color(0xFF7C4DFF), Color(0xFFD1C4E9)), // Electric Violet / Pastel Lilac
+    Pair(Color(0xFFAA00FF), Color(0xFFEA80FC)), // Vivid Violet / Pastel Orchid
+    Pair(Color(0xFFD500F9), Color(0xFFE1BEE7)), // Hyper Magenta / Soft Lavender
+    // 8. Pinks, Earthy & Monochromes
+    Pair(Color(0xFFFF007F), Color(0xFFFF80AB)), // Electric Neon Pink / Pastel Bubblegum
+    Pair(Color(0xFFC2185B), Color(0xFFF8BBD0)), // Deep Raspberry / Soft Rose Pink
+    Pair(Color(0xFF5D4037), Color(0xFFD7CCC8)), // Deep Espresso Brown / Milk Tea Sand
     Pair(Color(0xFF101014), Color(0xFFFFFFFF))  // Pitch Black / Pure Brilliant White
 )
 
-val PRESET_COLORS_ROW1 = CHROMATIC_COLOR_PAIRS.map { it.first }
-val PRESET_COLORS_ROW2 = CHROMATIC_COLOR_PAIRS.map { it.second }
-val ALL_PRESET_COLORS = PRESET_COLORS_ROW1 + PRESET_COLORS_ROW2
+val PRESET_COLORS_ROW1: List<Color> = CHROMATIC_COLOR_PAIRS_64.map { it.first }
+val PRESET_COLORS_ROW2: List<Color> = CHROMATIC_COLOR_PAIRS_64.map { it.second }
+val ALL_PRESET_COLORS: List<Color> = PRESET_COLORS_ROW1 + PRESET_COLORS_ROW2
 
 @Composable
 fun ColorPickerBar(
@@ -79,20 +101,20 @@ fun ColorPickerBar(
     modifier: Modifier = Modifier
 ) {
     var showCustomDialog by remember { mutableStateOf(false) }
-    val unifiedScrollState = rememberScrollState()
+    val scrollState = rememberScrollState()
 
-    // Unified 2-row chromatic palette: single scroll container moving both rows synchronously
+    // 2-row 64-color chromatic spectrum starting from Red to White
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(unifiedScrollState)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+            .horizontalScroll(scrollState)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Custom RGB Color Picker Button Column (Leading controls)
+        // Custom Color Picker Button Column (Leading controls)
         Column(
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Row 1: Custom Palette / Color Wheel icon
@@ -100,7 +122,7 @@ fun ColorPickerBar(
                 color = Color(0xCC1A1B28),
                 shape = CircleShape,
                 modifier = Modifier
-                    .size(32.dp)
+                    .size(31.dp)
                     .clickable { showCustomDialog = true }
                     .testTag("custom_color_picker_btn"),
                 border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0x66FFFFFF))
@@ -110,7 +132,7 @@ fun ColorPickerBar(
                         imageVector = Icons.Default.ColorLens,
                         contentDescription = "Colori Personalizzati",
                         tint = Color(0xFFD0BCFF),
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
@@ -120,7 +142,7 @@ fun ColorPickerBar(
                 color = Color(0x33FFFFFF),
                 shape = CircleShape,
                 modifier = Modifier
-                    .size(32.dp)
+                    .size(31.dp)
                     .clickable { showCustomDialog = true }
                     .testTag("custom_rgb_picker_btn"),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x44FFFFFF))
@@ -129,17 +151,17 @@ fun ColorPickerBar(
                     Text(
                         text = "RGB",
                         color = Color.White,
-                        fontSize = 9.sp,
+                        fontSize = 8.5.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
 
-        // Chromatic Color Columns: each column has Row 1 (Vivid) and Row 2 (Pastel/Complementary)
-        CHROMATIC_COLOR_PAIRS.forEach { (colorTop, colorBottom) ->
+        // 32 Chromatic Pairs (64 colors total): Top Row (Vivid/Deep) and Bottom Row (Pastel/Complementary)
+        CHROMATIC_COLOR_PAIRS_64.forEach { (colorTop, colorBottom) ->
             Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 ColorSwatch(

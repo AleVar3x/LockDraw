@@ -1073,6 +1073,7 @@ class PartnerSyncManager(
                 "neon" -> BrushType.NEON
                 "rainbow" -> BrushType.RAINBOW
                 "pencil" -> BrushType.PENCIL
+                "spray" -> BrushType.SPRAY
                 else -> BrushType.PEN
             }
 

@@ -7,7 +7,8 @@ enum class StrokeModifier(val displayName: String, val isPremium: Boolean = fals
     NONE("Normale", isPremium = false),
     WAVE("Wave", isPremium = true),
     PULSING("Pulsing", isPremium = true),
-    DOT_FLOW("Dot Flow", isPremium = true)
+    SPARKLING("Sparkling", isPremium = true),
+    DOT_FLOW("Flow", isPremium = true)
 }
 
 enum class BrushType(val displayName: String, val iconRes: String, val isPremium: Boolean = false) {
@@ -15,17 +16,24 @@ enum class BrushType(val displayName: String, val iconRes: String, val isPremium
     PENCIL("Matita", "pencil"),
     HIGHLIGHTER("Evidenziatore", "highlighter"),
     NEON("Neon Glow", "neon"),
+    SPRAY("Bomboletta Spray", "spray", isPremium = true),
     RAINBOW("Arcobaleno", "rainbow"),
     DOTTED("Puntini", "dotted"),
     WAVY("Penna Ondulata", "wavy", isPremium = true),
     ANIMATED_WAVE("Wave", "animated_wave", isPremium = true),
-    DOT_FLOW("Dot Flow", "dot_flow", isPremium = true),
-    PULSING_NEON("Pulsing", "pulsing_neon", isPremium = true),
+    DOT_FLOW("Flow", "dot_flow", isPremium = true),
+    PULSING_NEON("Neon Pulsing", "pulsing_neon", isPremium = true),
+    PULSING_SPRAY("Spray Flow", "pulsing_spray", isPremium = true),
     ERASER("Gomma", "eraser");
 
     fun getSupportedModifiers(): List<StrokeModifier> {
         return when (this) {
             DOTTED -> listOf(StrokeModifier.NONE, StrokeModifier.DOT_FLOW)
+            SPRAY -> listOf(
+                StrokeModifier.NONE,
+                StrokeModifier.DOT_FLOW,
+                StrokeModifier.SPARKLING
+            )
             PEN, PENCIL, HIGHLIGHTER, NEON, RAINBOW -> listOf(
                 StrokeModifier.NONE,
                 StrokeModifier.WAVE,

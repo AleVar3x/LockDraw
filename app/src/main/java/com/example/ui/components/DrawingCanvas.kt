@@ -502,6 +502,7 @@ private fun DrawScope.renderStroke(
         stroke.modifier != StrokeModifier.NONE -> stroke.modifier
         stroke.brushType == BrushType.ANIMATED_WAVE -> StrokeModifier.WAVE
         stroke.brushType == BrushType.PULSING_NEON -> StrokeModifier.PULSING
+        stroke.brushType == BrushType.PULSING_SPRAY -> StrokeModifier.DOT_FLOW
         stroke.brushType == BrushType.DOT_FLOW -> StrokeModifier.DOT_FLOW
         else -> StrokeModifier.NONE
     }
@@ -509,6 +510,7 @@ private fun DrawScope.renderStroke(
     val effectiveBrush = when (stroke.brushType) {
         BrushType.ANIMATED_WAVE -> BrushType.PEN
         BrushType.PULSING_NEON -> BrushType.NEON
+        BrushType.PULSING_SPRAY -> BrushType.SPRAY
         BrushType.DOT_FLOW -> BrushType.DOTTED
         else -> stroke.brushType
     }
@@ -528,56 +530,72 @@ private fun DrawScope.renderStroke(
 
     when (effectiveModifier) {
         StrokeModifier.DOT_FLOW -> {
-            // Live flowing dots moving with same cycle rate as wave
-            val dotWidth = (stroke.strokeWidth * 0.35f).coerceIn(2f, 8f)
-            val gapWidth = stroke.strokeWidth * 1.8f
-            val patternPeriod = dotWidth + gapWidth
-            val dynamicPhase = dotFlowPhase * patternPeriod
+            if (effectiveBrush == BrushType.SPRAY) {
+                // Live Spray Flow: aerosol particles that smoothly stream and flow along the stroke trajectory
+                drawSprayStroke(
+                    stroke = effectiveStroke,
+                    canvasW = canvasW,
+                    canvasH = canvasH,
+                    baseColor = baseColor,
+                    scaledAlpha = scaledAlpha,
+                    isPulsing = false,
+                    isSparkling = false,
+                    isFlow = true,
+                    flowPhase = dotFlowPhase,
+                    neonPulse = 1.0f
+                )
+            } else {
+                // Live flowing dots moving with same cycle rate as wave
+                val dotWidth = (stroke.strokeWidth * 0.35f).coerceIn(2f, 8f)
+                val gapWidth = stroke.strokeWidth * 1.8f
+                val patternPeriod = dotWidth + gapWidth
+                val dynamicPhase = dotFlowPhase * patternPeriod
 
-            // Soft glowing aura
-            drawPath(
-                path = path,
-                color = baseColor.copy(alpha = (scaledAlpha * 0.45f).coerceIn(0.01f, 1.0f)),
-                style = Stroke(
-                    width = stroke.strokeWidth * 1.75f,
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round,
-                    pathEffect = PathEffect.dashPathEffect(
-                        floatArrayOf(dotWidth, gapWidth),
-                        dynamicPhase
+                // Soft glowing aura
+                drawPath(
+                    path = path,
+                    color = baseColor.copy(alpha = (scaledAlpha * 0.45f).coerceIn(0.01f, 1.0f)),
+                    style = Stroke(
+                        width = stroke.strokeWidth * 1.75f,
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round,
+                        pathEffect = PathEffect.dashPathEffect(
+                            floatArrayOf(dotWidth, gapWidth),
+                            dynamicPhase
+                        )
                     )
                 )
-            )
 
-            // Primary vivid flowing dots
-            drawPath(
-                path = path,
-                color = baseColor,
-                style = Stroke(
-                    width = stroke.strokeWidth,
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round,
-                    pathEffect = PathEffect.dashPathEffect(
-                        floatArrayOf(dotWidth, gapWidth),
-                        dynamicPhase
+                // Primary vivid flowing dots
+                drawPath(
+                    path = path,
+                    color = baseColor,
+                    style = Stroke(
+                        width = stroke.strokeWidth,
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round,
+                        pathEffect = PathEffect.dashPathEffect(
+                            floatArrayOf(dotWidth, gapWidth),
+                            dynamicPhase
+                        )
                     )
                 )
-            )
 
-            // Crisp glowing core sparkle for each moving dot
-            drawPath(
-                path = path,
-                color = Color.White.copy(alpha = (scaledAlpha * 0.90f).coerceIn(0.01f, 1.0f)),
-                style = Stroke(
-                    width = (stroke.strokeWidth * 0.42f).coerceAtLeast(1.5f),
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round,
-                    pathEffect = PathEffect.dashPathEffect(
-                        floatArrayOf(dotWidth * 0.75f, gapWidth + dotWidth * 0.25f),
-                        dynamicPhase
+                // Crisp glowing core sparkle for each moving dot
+                drawPath(
+                    path = path,
+                    color = Color.White.copy(alpha = (scaledAlpha * 0.90f).coerceIn(0.01f, 1.0f)),
+                    style = Stroke(
+                        width = (stroke.strokeWidth * 0.42f).coerceAtLeast(1.5f),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round,
+                        pathEffect = PathEffect.dashPathEffect(
+                            floatArrayOf(dotWidth * 0.75f, gapWidth + dotWidth * 0.25f),
+                            dynamicPhase
+                        )
                     )
                 )
-            )
+            }
         }
 
         StrokeModifier.WAVE -> {
@@ -668,6 +686,17 @@ private fun DrawScope.renderStroke(
                         )
                     )
                 }
+                BrushType.SPRAY -> {
+                    drawSprayStroke(
+                        stroke = effectiveStroke,
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = scaledAlpha,
+                        isPulsing = false,
+                        neonPulse = 1.0f
+                    )
+                }
                 else -> {
                     // PEN & Default
                     drawPath(
@@ -747,6 +776,18 @@ private fun DrawScope.renderStroke(
                         )
                     )
                 }
+                BrushType.SPRAY -> {
+                    drawSprayStroke(
+                        stroke = effectiveStroke,
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = scaledAlpha,
+                        isPulsing = true,
+                        isSparkling = false,
+                        neonPulse = neonPulse
+                    )
+                }
                 else -> {
                     // PEN & Default
                     val outerWidth = stroke.strokeWidth * (2.4f * neonPulse)
@@ -765,8 +806,50 @@ private fun DrawScope.renderStroke(
             }
         }
 
+        StrokeModifier.SPARKLING -> {
+            // Live sparkling glint & glitter scatter animation
+            when (effectiveBrush) {
+                BrushType.SPRAY -> {
+                    drawSprayStroke(
+                        stroke = effectiveStroke,
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = scaledAlpha,
+                        isPulsing = false,
+                        isSparkling = true,
+                        neonPulse = neonPulse
+                    )
+                }
+                else -> {
+                    // Default sparkling stroke
+                    drawPath(
+                        path = path,
+                        color = baseColor,
+                        style = Stroke(width = stroke.strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                    drawPath(
+                        path = path,
+                        color = Color.White.copy(alpha = (scaledAlpha * (0.7f + 0.3f * neonPulse)).coerceIn(0.01f, 1.0f)),
+                        style = Stroke(width = (stroke.strokeWidth * 0.35f).coerceAtLeast(1.5f), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                }
+            }
+        }
+
         StrokeModifier.NONE -> {
             when (effectiveBrush) {
+                BrushType.SPRAY -> {
+                    drawSprayStroke(
+                        stroke = effectiveStroke,
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = scaledAlpha,
+                        isPulsing = false,
+                        neonPulse = 1.0f
+                    )
+                }
                 BrushType.PEN -> {
                     drawPath(
                         path = path,
@@ -903,6 +986,162 @@ private fun DrawScope.renderStroke(
                         path = path,
                         color = baseColor,
                         style = Stroke(width = stroke.strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Authentic Microsoft Paint style Airbrush / Spray Can scatter renderer with optional dynamic Flow and Sparkling effects.
+ */
+private fun DrawScope.drawSprayStroke(
+    stroke: DrawingStroke,
+    canvasW: Float,
+    canvasH: Float,
+    baseColor: Color,
+    scaledAlpha: Float,
+    isPulsing: Boolean = false,
+    isSparkling: Boolean = false,
+    isFlow: Boolean = false,
+    flowPhase: Float = 0f,
+    neonPulse: Float = 1.0f
+) {
+    if (stroke.points.isEmpty()) return
+    val pts = stroke.points
+    val baseRadius = (stroke.strokeWidth * 1.5f).coerceIn(12f, 65f)
+    val effectiveRadius = if (isPulsing) baseRadius * (0.8f + 0.45f * neonPulse) else baseRadius
+
+    // Seed generator from stroke ID to guarantee stable, deterministic scatter without flickering on recomposition
+    val seed = stroke.id.hashCode().toLong()
+    val random = java.util.Random(seed)
+
+    // Number of dots per sample stamp
+    val dotsPerStamp = (stroke.strokeWidth * 1.6f).toInt().coerceIn(18, 48)
+    val dotSizeBase = (stroke.strokeWidth * 0.12f).coerceIn(1.2f, 3.2f)
+
+    for (i in pts.indices) {
+        val p0 = pts[i]
+        val x0 = p0.x * canvasW
+        val y0 = p0.y * canvasH
+
+        // If there's a previous point, interpolate intermediate spray stamps for fluid stroke coverage
+        val steps = if (i > 0) {
+            val pPrev = pts[i - 1]
+            val dist = kotlin.math.hypot((p0.x - pPrev.x) * canvasW, (p0.y - pPrev.y) * canvasH)
+            (dist / (effectiveRadius * 0.40f)).toInt().coerceIn(1, 18)
+        } else 1
+
+        val pPrev = if (i > 0) pts[i - 1] else p0
+        val prevX = pPrev.x * canvasW
+        val prevY = pPrev.y * canvasH
+
+        for (s in 0 until steps) {
+            val t = if (steps > 1) (s + 1).toFloat() / steps else 1f
+            val cx = prevX + (x0 - prevX) * t
+            val cy = prevY + (y0 - prevY) * t
+
+            // If pulsing, draw a soft glowing breathing aerosol halo aura under the spray stamp
+            if (isPulsing) {
+                drawCircle(
+                    color = baseColor.copy(alpha = (scaledAlpha * 0.12f * neonPulse).coerceIn(0.01f, 1.0f)),
+                    radius = effectiveRadius * 1.25f,
+                    center = Offset(cx, cy)
+                )
+            }
+
+            // Scatter aerosol droplets in circular distribution (MS Paint density distribution)
+            for (d in 0 until dotsPerStamp) {
+                val angle = random.nextFloat() * (2 * Math.PI).toFloat()
+                // Quadratic/Gaussian distance distribution: denser near the nozzle center, softer at the perimeter
+                val rFactor = (random.nextFloat() + random.nextFloat()) / 2f
+                val dist = rFactor * effectiveRadius
+                val dotX = cx + kotlin.math.cos(angle) * dist
+                val dotY = cy + kotlin.math.sin(angle) * dist
+
+                val dotRadius = if (random.nextFloat() > 0.85f) dotSizeBase * 1.5f else dotSizeBase
+
+                if (isFlow) {
+                    // Aerosol Flow animation: individual droplets stream and cycle their luminous intensity and scale
+                    val dotPhaseOffset = (random.nextFloat() + (i.toFloat() / pts.size.coerceAtLeast(1))) % 1f
+                    val animatedFlowPhase = (flowPhase + dotPhaseOffset) % 1f
+                    val flowBrightness = (0.35f + 0.65f * kotlin.math.sin(animatedFlowPhase * Math.PI).toFloat()).coerceIn(0.1f, 1f)
+                    val flowAlpha = (scaledAlpha * (0.35f + 0.65f * (1f - rFactor * 0.4f)) * flowBrightness).coerceIn(0.01f, 1.0f)
+                    val flowRadius = dotRadius * (0.85f + 0.4f * flowBrightness)
+
+                    drawCircle(
+                        color = baseColor.copy(alpha = flowAlpha),
+                        radius = flowRadius,
+                        center = Offset(dotX, dotY)
+                    )
+
+                    // Moving bright core particle on streaming droplets
+                    if (flowBrightness > 0.75f && rFactor < 0.5f) {
+                        drawCircle(
+                            color = Color.White.copy(alpha = (flowAlpha * 0.85f).coerceIn(0.01f, 1.0f)),
+                            radius = flowRadius * 0.5f,
+                            center = Offset(dotX, dotY)
+                        )
+                    }
+                } else {
+                    val dotAlpha = (scaledAlpha * (0.45f + 0.55f * (1f - rFactor * 0.5f))).coerceIn(0.01f, 1.0f)
+
+                    drawCircle(
+                        color = baseColor.copy(alpha = dotAlpha),
+                        radius = dotRadius,
+                        center = Offset(dotX, dotY)
+                    )
+
+                    // Pulsing highlight sparkle on core droplets
+                    if (isPulsing && rFactor < 0.35f && random.nextFloat() > 0.65f) {
+                        drawCircle(
+                            color = Color.White.copy(alpha = (scaledAlpha * 0.85f * neonPulse).coerceIn(0.01f, 1.0f)),
+                            radius = dotRadius * 0.8f,
+                            center = Offset(dotX, dotY)
+                        )
+                    }
+                }
+
+                // Sparkling glitter & 4-point star glints using palette-matched gradient tints (no glow)
+                if (isSparkling && random.nextFloat() > 0.70f) {
+                    val sparklePhase = (neonPulse + random.nextFloat()) % 1.0f
+                    val sparkleAlpha = (scaledAlpha * (0.45f + 0.55f * kotlin.math.sin(sparklePhase * Math.PI).toFloat())).coerceIn(0.01f, 1.0f)
+                    val starSize = dotRadius * (1.8f + 1.4f * sparklePhase)
+
+                    // Luminous palette-derived tint for the 4-point cross and stardust center
+                    val sparkleCrossColor = Color(
+                        red = (baseColor.red * 0.55f + 0.45f).coerceIn(0f, 1f),
+                        green = (baseColor.green * 0.55f + 0.45f).coerceIn(0f, 1f),
+                        blue = (baseColor.blue * 0.55f + 0.45f).coerceIn(0f, 1f),
+                        alpha = sparkleAlpha
+                    )
+                    val sparkleCoreColor = Color(
+                        red = (baseColor.red * 0.80f + 0.20f).coerceIn(0f, 1f),
+                        green = (baseColor.green * 0.80f + 0.20f).coerceIn(0f, 1f),
+                        blue = (baseColor.blue * 0.80f + 0.20f).coerceIn(0f, 1f),
+                        alpha = sparkleAlpha
+                    )
+
+                    // Draw 4-point sparkle cross matching the palette color
+                    drawLine(
+                        color = sparkleCrossColor,
+                        start = Offset(dotX - starSize, dotY),
+                        end = Offset(dotX + starSize, dotY),
+                        strokeWidth = 1.6f,
+                        cap = StrokeCap.Round
+                    )
+                    drawLine(
+                        color = sparkleCrossColor,
+                        start = Offset(dotX, dotY - starSize),
+                        end = Offset(dotX, dotY + starSize),
+                        strokeWidth = 1.6f,
+                        cap = StrokeCap.Round
+                    )
+                    drawCircle(
+                        color = sparkleCoreColor,
+                        radius = starSize * 0.45f,
+                        center = Offset(dotX, dotY)
                     )
                 }
             }
