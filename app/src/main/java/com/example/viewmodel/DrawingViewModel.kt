@@ -1,5 +1,6 @@
 package com.example.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -45,6 +46,8 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
 
     // VIP Premium & Paywall state
     val isPremiumUnlocked: StateFlow<Boolean> = repository.isPremiumUnlocked
+    val formattedVipPrice: StateFlow<String> = repository.formattedVipPrice
+    val billingStatus = repository.billingStatus
     val partnerNotificationsEnabled: StateFlow<Boolean> = repository.partnerNotificationsEnabled
     val customStickers: StateFlow<List<com.example.data.model.CustomStickerItem>> = repository.customStickers
 
@@ -61,6 +64,14 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val roomCode: StateFlow<String> = repository.roomCode
     val myName: StateFlow<String> = repository.myName
     val partnerCustomName: StateFlow<String> = repository.partnerCustomName
+
+    fun launchBillingFlow(activity: Activity): Boolean {
+        return repository.launchBillingFlow(activity)
+    }
+
+    fun restorePurchases(onComplete: (Boolean) -> Unit) {
+        repository.restorePurchases(onComplete)
+    }
 
     fun unlockPremium(unlocked: Boolean = true) {
         repository.unlockPremium(unlocked)

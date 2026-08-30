@@ -70,7 +70,10 @@ data class PaywallFeature(
 @Composable
 fun PaywallDialog(
     onDismiss: () -> Unit,
-    onUnlockSuccess: () -> Unit
+    onUnlockSuccess: () -> Unit,
+    formattedPrice: String = "4,99 €",
+    onPurchaseClicked: () -> Unit = onUnlockSuccess,
+    onRestoreClicked: () -> Unit = onUnlockSuccess
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse_vip")
     val pulseScale by infiniteTransition.animateFloat(
@@ -315,13 +318,13 @@ fun PaywallDialog(
                     ) {
                         Column {
                             Text(
-                                text = "Offerta Speciale",
+                                text = "Google Play In-App",
                                 color = Color(0xFFFFD54F),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Acquisto Una Tantum",
+                                text = "Acquisto Una Tantum (A Vita)",
                                 color = Color.White,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
@@ -329,7 +332,7 @@ fun PaywallDialog(
                         }
 
                         Text(
-                            text = "4,99 €",
+                            text = formattedPrice,
                             color = Color(0xFF80FFEA),
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Black
@@ -341,7 +344,7 @@ fun PaywallDialog(
 
                 // CTA Unlock Button
                 Button(
-                    onClick = onUnlockSuccess,
+                    onClick = onPurchaseClicked,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFFFF2A6D),
                         contentColor = Color.White
@@ -359,7 +362,7 @@ fun PaywallDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Sblocca Tutto a 4,99 €",
+                        text = "Sblocca con Google Play ($formattedPrice)",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black
                     )
@@ -373,7 +376,7 @@ fun PaywallDialog(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     TextButton(
-                        onClick = onUnlockSuccess,
+                        onClick = onRestoreClicked,
                         modifier = Modifier.testTag("restore_purchases_btn")
                     ) {
                         Text(

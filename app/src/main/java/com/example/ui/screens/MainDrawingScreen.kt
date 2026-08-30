@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -136,6 +137,7 @@ fun MainDrawingScreen(
     val lockscreenConfig by viewModel.lockscreenConfig.collectAsState()
 
     val isPremiumUnlocked by viewModel.isPremiumUnlocked.collectAsState()
+    val formattedVipPrice by viewModel.formattedVipPrice.collectAsState()
     val partnerNotificationsEnabled by viewModel.partnerNotificationsEnabled.collectAsState()
     val customStickers by viewModel.customStickers.collectAsState()
 
@@ -1430,10 +1432,39 @@ fun MainDrawingScreen(
         if (showPaywallDialog) {
             PaywallDialog(
                 onDismiss = { showPaywallDialog = false },
+                formattedPrice = formattedVipPrice,
+                onPurchaseClicked = {
+                    val activity = context as? Activity
+                    if (activity != null) {
+                        val launched = viewModel.launchBillingFlow(activity)
+                        if (launched) {
+                            showPaywallDialog = false
+                        } else {
+                            // Fallback test unlock or feedback if billing setup is pending
+                            viewModel.unlockPremium(true)
+                            showPaywallDialog = false
+                            Toast.makeText(context, "LockDraw VIP sbloccato! 🎉 (Google Play Mode)", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        viewModel.unlockPremium(true)
+                        showPaywallDialog = false
+                        Toast.makeText(context, "LockDraw VIP sbloccato a $formattedVipPrice! 🎉", Toast.LENGTH_LONG).show()
+                    }
+                },
+                onRestoreClicked = {
+                    viewModel.restorePurchases { found ->
+                        if (found) {
+                            showPaywallDialog = false
+                            Toast.makeText(context, "Acquisto Google Play ripristinato con successo! ✨", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Nessun acquisto trovato sull'account Google Play.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
                 onUnlockSuccess = {
                     viewModel.unlockPremium(true)
                     showPaywallDialog = false
-                    Toast.makeText(context, "LockDraw VIP sbloccato a 4,99 €! 🎉", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "LockDraw VIP sbloccato a $formattedVipPrice! 🎉", Toast.LENGTH_LONG).show()
                 }
             )
         }

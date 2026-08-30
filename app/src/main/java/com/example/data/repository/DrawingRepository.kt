@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
@@ -7,6 +8,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.example.data.billing.PlayBillingManager
 import com.example.data.local.DrawingDatabase
 import com.example.data.local.DrawingSessionEntity
 import com.example.data.local.SavedStickerEntity
@@ -62,6 +64,21 @@ class DrawingRepository private constructor(private val application: Application
     private val prefs: SharedPreferences = application.getSharedPreferences("lockdraw_prefs", Context.MODE_PRIVATE)
 
     val syncManager = PartnerSyncManager(application, scope)
+    val playBillingManager = PlayBillingManager(application) { unlocked ->
+        unlockPremium(unlocked)
+    }
+
+    // VIP Pricing & Billing
+    val formattedVipPrice: StateFlow<String> = playBillingManager.formattedPrice
+    val billingStatus = playBillingManager.billingState
+
+    fun launchBillingFlow(activity: Activity): Boolean {
+        return playBillingManager.launchBillingFlow(activity)
+    }
+
+    fun restorePurchases(onComplete: (Boolean) -> Unit) {
+        playBillingManager.restorePurchases(onComplete)
+    }
 
     // Drawing state
     private val _strokes = MutableStateFlow<List<DrawingStroke>>(emptyList())
