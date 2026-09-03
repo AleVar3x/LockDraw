@@ -1,0 +1,39 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Water Brush Pen (Pennello ad acqua / Aqua Brush) -->
+    <!-- Reservoir barrel end cap -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M20.64,3.36c-0.48,-0.48 -1.25,-0.48 -1.73,0l-1.41,1.41l2.45,2.45l1.41,-1.41c0.48,-0.48 0.48,-1.25 0,-1.73l-0.72,-0.72z" />
+    
+    <!-- Water Reservoir Barrel (Cylinder with water view window) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M16.79,5.47l-4.95,4.95c-0.2,0.2 -0.2,0.51 0,0.71l1.74,1.74c0.2,0.2 0.51,0.2 0.71,0l4.95,-4.95l-2.45,-2.45z" />
+
+    <!-- Barrel connection collar / feed section -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.14,11.12l-1.41,1.41l2.45,2.45l1.41,-1.41l-2.45,-2.45z" />
+
+    <!-- Pointed Fine Brush Bristles (Tapering to needle tip) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.02,13.24l1.74,1.74c-0.5,0.9 -1.2,1.8 -2.4,2.5c-0.9,0.5 -1.7,1.1 -2.3,1.8c-0.2,0.2 -0.5,0.1 -0.5,-0.2c0,-0.8 0.4,-1.8 1.1,-2.7C7.42,15.24 8.22,14.24 9.02,13.24z" />
+
+    <!-- Water Drop dripping from the brush tip -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4.5,19.2c0,0 -2,2.3 -2,3.3c0,1.1 0.9,2 2,2s2,-0.9 2,-2C6.5,21.5 4.5,19.2 4.5,19.2z" />
+
+    <!-- Water Flow Ripples / Droplet Splash Accent -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.2,21.5c-0.3,-0.3 -0.3,-0.8 0,-1.1c0.8,-0.8 2.1,-0.8 2.9,0c0.3,0.3 0.3,0.8 0,1.1c-0.8,0.8 -2.1,0.8 -2.9,0z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M1.5,17.5a0.75,0.75 0 1,0 1.5,0a0.75,0.75 0 1,0 -1.5,0" />
+</vector>

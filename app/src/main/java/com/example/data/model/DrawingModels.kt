@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.toArgb
 
 enum class StrokeModifier(val displayName: String, val isPremium: Boolean = false) {
     NONE("Normale", isPremium = false),
+    CALLIGRAPHY("Calligrafico", isPremium = false),
     WAVE("Wave", isPremium = true),
     PULSING("Pulsing", isPremium = true),
     SPARKLING("Sparkling", isPremium = true),
@@ -13,6 +14,7 @@ enum class StrokeModifier(val displayName: String, val isPremium: Boolean = fals
 
 enum class BrushType(val displayName: String, val iconRes: String, val isPremium: Boolean = false) {
     PEN("Penna", "pen"),
+    WATERCOLOR("Acquerello", "watercolor"),
     PENCIL("Matita", "pencil"),
     HIGHLIGHTER("Evidenziatore", "highlighter"),
     NEON("Neon Glow", "neon"),
@@ -34,7 +36,16 @@ enum class BrushType(val displayName: String, val iconRes: String, val isPremium
                 StrokeModifier.DOT_FLOW,
                 StrokeModifier.SPARKLING
             )
-            PEN, PENCIL, HIGHLIGHTER, NEON, RAINBOW -> listOf(
+            PEN -> listOf(
+                StrokeModifier.NONE,
+                StrokeModifier.WAVE,
+                StrokeModifier.PULSING
+            )
+            WATERCOLOR -> listOf(
+                StrokeModifier.NONE,
+                StrokeModifier.WAVE
+            )
+            PENCIL, HIGHLIGHTER, NEON, RAINBOW -> listOf(
                 StrokeModifier.NONE,
                 StrokeModifier.WAVE,
                 StrokeModifier.PULSING
@@ -109,3 +120,4 @@ data class LockscreenConfig(
     val customWallpaperUri: String? = null,
     val customClockFormat: String = "HH:mm"
 )
+

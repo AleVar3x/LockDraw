@@ -41,7 +41,9 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val selectedBrushType: StateFlow<BrushType> = repository.selectedBrushType
     val selectedModifier: StateFlow<com.example.data.model.StrokeModifier> = repository.selectedModifier
     val selectedColor: StateFlow<Color> = repository.selectedColor
+    val customColorPalette: StateFlow<List<Color>> = repository.customColorPalette
     val strokeWidth: StateFlow<Float> = repository.strokeWidth
+    val eraserSize: StateFlow<Float> = repository.eraserSize
     val strokeAlpha: StateFlow<Float> = repository.strokeAlpha
 
     // VIP Premium & Paywall state
@@ -49,7 +51,14 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
     val formattedVipPrice: StateFlow<String> = repository.formattedVipPrice
     val billingStatus = repository.billingStatus
     val partnerNotificationsEnabled: StateFlow<Boolean> = repository.partnerNotificationsEnabled
+    val speedResponsivePenEnabled: StateFlow<Boolean> = repository.speedResponsivePenEnabled
+    val hapticFeedbackEnabled: StateFlow<Boolean> = repository.hapticFeedbackEnabled
     val customStickers: StateFlow<List<com.example.data.model.CustomStickerItem>> = repository.customStickers
+
+    // Offline & Sync state
+    val isDeviceOnline: StateFlow<Boolean> = repository.isDeviceOnline
+    val cloudSyncState: StateFlow<com.example.data.sync.CloudSyncState> = repository.cloudSyncState
+    val hasUnsyncedStrokes: StateFlow<Boolean> = repository.hasUnsyncedStrokes
 
     // Floating state
     val lockscreenConfig: StateFlow<LockscreenConfig> = repository.lockscreenConfig
@@ -79,6 +88,14 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
 
     fun setPartnerNotificationsEnabled(enabled: Boolean) {
         repository.setPartnerNotificationsEnabled(enabled)
+    }
+
+    fun setHapticFeedbackEnabled(enabled: Boolean) {
+        repository.setHapticFeedbackEnabled(enabled)
+    }
+
+    fun setSpeedResponsivePenEnabled(enabled: Boolean) {
+        repository.setSpeedResponsivePenEnabled(enabled)
     }
 
     fun addCustomSticker(sticker: com.example.data.model.CustomStickerItem) {
@@ -138,8 +155,28 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
         repository.selectColor(color)
     }
 
+    fun addColorToCustomPalette(color: Color) {
+        repository.addColorToCustomPalette(color)
+    }
+
+    fun removeColorFromCustomPalette(index: Int) {
+        repository.removeColorFromCustomPalette(index)
+    }
+
+    fun updateColorInCustomPalette(index: Int, newColor: Color) {
+        repository.updateColorInCustomPalette(index, newColor)
+    }
+
+    fun resetCustomColorPalette() {
+        repository.resetCustomColorPalette()
+    }
+
     fun setStrokeWidth(width: Float) {
         repository.setStrokeWidth(width)
+    }
+
+    fun setEraserSize(size: Float) {
+        repository.setEraserSize(size)
     }
 
     fun setStrokeAlpha(alpha: Float) {

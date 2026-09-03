@@ -11,7 +11,7 @@ import androidx.room.RoomDatabase
         SavedStrokeEntity::class,
         SavedStickerEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class DrawingDatabase : RoomDatabase() {

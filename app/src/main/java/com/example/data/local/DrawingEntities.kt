@@ -11,7 +11,8 @@ data class DrawingSessionEntity(
     val customWallpaperUri: String?,
     val updatedAt: Long = System.currentTimeMillis(),
     val hasUnsyncedChanges: Boolean = false,
-    val boardVersion: Long = 0L
+    val boardVersion: Long = 0L,
+    val lastSyncedAt: Long = 0L
 )
 
 @Entity(tableName = "saved_strokes")

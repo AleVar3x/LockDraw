@@ -77,6 +77,7 @@ fun FloatingOverlayCanvas(
     val selectedBrush by repository.selectedBrushType.collectAsState()
     val selectedModifier by repository.selectedModifier.collectAsState()
     val selectedColor by repository.selectedColor.collectAsState()
+    val customColors by repository.customColorPalette.collectAsState()
     val strokeWidth by repository.strokeWidth.collectAsState()
     val strokeAlpha by repository.strokeAlpha.collectAsState()
     val partnerPresence by repository.partnerPresence.collectAsState()
@@ -327,17 +328,30 @@ fun FloatingOverlayCanvas(
                     // Color bar (if not eraser)
                     if (selectedBrush != BrushType.ERASER) {
                         Surface(
-                            color = Color(0xE612131F),
-                            shape = RoundedCornerShape(32.dp),
+                            color = Color(0xF2121320),
+                            shape = RoundedCornerShape(26.dp),
                             border = BorderStroke(1.2.dp, Color(0x38FFFFFF)),
                             shadowElevation = 12.dp,
                             modifier = Modifier.padding(bottom = 6.dp)
                         ) {
                             ColorPickerBar(
                                 selectedColor = selectedColor,
+                                customColors = customColors,
                                 onColorSelected = {
                                     repository.selectColor(it)
                                     isPaletteCollapsed = true
+                                },
+                                onAddCustomColor = {
+                                    repository.addColorToCustomPalette(it)
+                                },
+                                onRemoveCustomColor = {
+                                    repository.removeColorFromCustomPalette(it)
+                                },
+                                onUpdateCustomColor = { index, newColor ->
+                                    repository.updateColorInCustomPalette(index, newColor)
+                                },
+                                onResetCustomPalette = {
+                                    repository.resetCustomColorPalette()
                                 }
                             )
                         }

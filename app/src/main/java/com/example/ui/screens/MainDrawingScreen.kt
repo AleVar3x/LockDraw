@@ -42,8 +42,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Palette
@@ -93,19 +95,31 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.BrushType
 import com.example.data.model.WallpaperTheme
 import com.example.data.sync.ConnectionStatus
+import com.example.ui.components.ColorPickerBar
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import com.example.data.sync.CloudSyncState
 import com.example.ui.components.PaywallDialog
 import com.example.ui.components.DrawingCanvas
 import com.example.ui.components.StickerBottomSheet
 import com.example.ui.components.openWhatsAppDirectly
 import com.example.util.QrCodeView
+import com.example.util.TactileFeedbackHelper
 import com.example.viewmodel.DrawingViewModel
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -138,11 +152,17 @@ fun MainDrawingScreen(
 
     val isPremiumUnlocked by viewModel.isPremiumUnlocked.collectAsState()
     val formattedVipPrice by viewModel.formattedVipPrice.collectAsState()
+    val speedResponsivePenEnabled by viewModel.speedResponsivePenEnabled.collectAsState()
     val partnerNotificationsEnabled by viewModel.partnerNotificationsEnabled.collectAsState()
+    val hapticFeedbackEnabled by viewModel.hapticFeedbackEnabled.collectAsState()
     val customStickers by viewModel.customStickers.collectAsState()
+    val isDeviceOnline by viewModel.isDeviceOnline.collectAsState()
+    val cloudSyncState by viewModel.cloudSyncState.collectAsState()
+    val hasUnsyncedStrokes by viewModel.hasUnsyncedStrokes.collectAsState()
 
     val selectedBrushType by viewModel.selectedBrushType.collectAsState()
     val selectedColor by viewModel.selectedColor.collectAsState()
+    val customColors by viewModel.customColorPalette.collectAsState()
     val strokeWidth by viewModel.strokeWidth.collectAsState()
 
     var partnerCodeInput by remember { mutableStateOf("") }
@@ -1380,6 +1400,554 @@ fun MainDrawingScreen(
                                 text = "Emoji & Sticker",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 7. SALVATAGGIO LOCALE DEI TRATTI & SINCRONIZZAZIONE AUTOMATICA FIRESTORE
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDeviceOnline) Color(0xD916241D) else Color(0xD92E2113)
+                ),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(
+                    1.2.dp,
+                    if (isDeviceOnline) Color(0x664ADE80) else Color(0x66FFB74D)
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("offline_sync_status_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = if (isDeviceOnline) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (isDeviceOnline) Icons.Default.Wifi else Icons.Default.WifiOff,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (isDeviceOnline) "Sincronizzazione Cloud Attiva" else "Modalità Offline (Salvataggio Locale)",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    text = if (isDeviceOnline) "Connessione internet attiva" else "Nessuna connessione rilevata",
+                                    color = if (isDeviceOnline) Color(0xFFA5D6A7) else Color(0xFFFFCC80),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+
+                        // Badge stato sync
+                        Surface(
+                            color = when (cloudSyncState) {
+                                CloudSyncState.SYNCED -> Color(0x334ADE80)
+                                CloudSyncState.SYNCING -> Color(0x3300E5FF)
+                                CloudSyncState.SAVED_OFFLINE, CloudSyncState.OFFLINE_WAITING -> Color(0x33FFB74D)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                when (cloudSyncState) {
+                                    CloudSyncState.SYNCED -> Color(0xFF4ADE80)
+                                    CloudSyncState.SYNCING -> Color(0xFF00E5FF)
+                                    CloudSyncState.SAVED_OFFLINE, CloudSyncState.OFFLINE_WAITING -> Color(0xFFFFB74D)
+                                }
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = when (cloudSyncState) {
+                                        CloudSyncState.SYNCED -> Icons.Default.CloudDone
+                                        CloudSyncState.SYNCING -> Icons.Default.Sync
+                                        CloudSyncState.SAVED_OFFLINE, CloudSyncState.OFFLINE_WAITING -> Icons.Default.CloudOff
+                                    },
+                                    contentDescription = null,
+                                    tint = when (cloudSyncState) {
+                                        CloudSyncState.SYNCED -> Color(0xFF4ADE80)
+                                        CloudSyncState.SYNCING -> Color(0xFF00E5FF)
+                                        CloudSyncState.SAVED_OFFLINE, CloudSyncState.OFFLINE_WAITING -> Color(0xFFFFB74D)
+                                    },
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = when (cloudSyncState) {
+                                        CloudSyncState.SYNCED -> "Sincronizzato"
+                                        CloudSyncState.SYNCING -> "Sincronizzo..."
+                                        CloudSyncState.SAVED_OFFLINE -> "Salvato Offline"
+                                        CloudSyncState.OFFLINE_WAITING -> "In attesa di rete"
+                                    },
+                                    color = when (cloudSyncState) {
+                                        CloudSyncState.SYNCED -> Color(0xFF4ADE80)
+                                        CloudSyncState.SYNCING -> Color(0xFF00E5FF)
+                                        CloudSyncState.SAVED_OFFLINE, CloudSyncState.OFFLINE_WAITING -> Color(0xFFFFB74D)
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    // Spiegazione comportamento offline-first
+                    Surface(
+                        color = if (isDeviceOnline) Color(0x1F4ADE80) else Color(0x1FFFB74D),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, if (isDeviceOnline) Color(0x334ADE80) else Color(0x33FFB74D)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = if (isDeviceOnline) {
+                                    if (hasUnsyncedStrokes) "I tratti in coda verranno inviati istantaneamente a Firestore."
+                                    else "Tutti i tratti sono sincronizzati in tempo reale con Firestore e persistiti in locale sul dispositivo."
+                                } else {
+                                    "Dispositivo offline: i tratti e gli sticker vengono salvati immediatamente nel database locale Room e verranno sincronizzati automaticamente con Firestore non appena la connessione internet tornerà disponibile."
+                                },
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 8. ESPERIENZA TATTILE: VIBRAZIONE APTICA PENNELLI
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xD918192A)),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.2.dp, Color(0x66FFAB40)),
+                modifier = Modifier.fillMaxWidth().testTag("tactile_feedback_settings_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = Color(0xFFFFAB40),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Vibration,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Vibrazione Aptica Pennelli",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    text = "Feedback tattile calibrato per ogni tipo di tratto",
+                                    color = Color(0xFFFFD180),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Toggle: Vibrazione Aptica Specifica per Pennello
+                    Surface(
+                        color = Color(0x1AFFAB40),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0x33FFAB40)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Vibration,
+                                    contentDescription = null,
+                                    tint = if (hapticFeedbackEnabled) Color(0xFFFFAB40) else Color.Gray,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Vibrazione Aptica Tratto",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = "Micro-vibrazioni durante il disegno",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = hapticFeedbackEnabled,
+                                onCheckedChange = { isEnabled ->
+                                    viewModel.setHapticFeedbackEnabled(isEnabled)
+                                    if (isEnabled) {
+                                        TactileFeedbackHelper.onStrokeStart(
+                                            brushType = BrushType.SPRAY,
+                                            hapticsEnabled = true
+                                        )
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFFFFAB40),
+                                    uncheckedThumbColor = Color(0xFF888888),
+                                    uncheckedTrackColor = Color(0xFF333344)
+                                ),
+                                modifier = Modifier.testTag("haptic_feedback_toggle")
+                            )
+                        }
+                    }
+
+                    // Prova rapida vibrazione pennelli
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Tocca per provare la vibrazione:",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Test Spray
+                            Surface(
+                                color = Color(0x33FF6B6B),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0x55FF6B6B)),
+                                modifier = Modifier
+                                    .clickable {
+                                        TactileFeedbackHelper.onStrokeStart(
+                                            brushType = BrushType.SPRAY,
+                                            hapticsEnabled = hapticFeedbackEnabled
+                                        )
+                                    }
+                                    .testTag("test_spray_tactile_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("💨 Spray", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+
+                            // Test Neon
+                            Surface(
+                                color = Color(0x3300E5FF),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0x5500E5FF)),
+                                modifier = Modifier
+                                    .clickable {
+                                        TactileFeedbackHelper.onStrokeStart(
+                                            brushType = BrushType.NEON,
+                                            hapticsEnabled = hapticFeedbackEnabled
+                                        )
+                                    }
+                                    .testTag("test_neon_tactile_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("⚡ Neon", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+
+                            // Test Penna
+                            Surface(
+                                color = Color(0x337C4DFF),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0x557C4DFF)),
+                                modifier = Modifier
+                                    .clickable {
+                                        TactileFeedbackHelper.onStrokeStart(
+                                            brushType = BrushType.PEN,
+                                            hapticsEnabled = hapticFeedbackEnabled
+                                        )
+                                    }
+                                    .testTag("test_pen_tactile_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("✏️ Penna", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+
+                            // Test Sticker Pop
+                            Surface(
+                                color = Color(0x33FF4081),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0x55FF4081)),
+                                modifier = Modifier
+                                    .clickable {
+                                        TactileFeedbackHelper.onStickerPlaced(
+                                            hapticsEnabled = hapticFeedbackEnabled
+                                        )
+                                    }
+                                    .testTag("test_sticker_tactile_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("💖 Sticker Pop", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 8b. TAVOLOZZA COLORI PERSONALIZZABILE (ACCESSO RAPIDO)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xD9181930)),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.2.dp, Color(0x66D0BCFF)),
+                modifier = Modifier.fillMaxWidth().testTag("customizable_palette_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = Color(0xFF4F378B),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Palette,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD0BCFF),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Tavolozza Rapida Personalizzabile",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    text = "Tocca per selezionare, tieni premuto per modificare",
+                                    color = Color(0xFFD0BCFF),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        color = Color(0xFF101120),
+                        shape = RoundedCornerShape(18.dp),
+                        border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        ColorPickerBar(
+                            selectedColor = selectedColor,
+                            customColors = customColors,
+                            onColorSelected = { viewModel.selectColor(it) },
+                            onAddCustomColor = { viewModel.addColorToCustomPalette(it) },
+                            onRemoveCustomColor = { viewModel.removeColorFromCustomPalette(it) },
+                            onUpdateCustomColor = { idx, col -> viewModel.updateColorInCustomPalette(idx, col) },
+                            onResetCustomPalette = { viewModel.resetCustomColorPalette() }
+                        )
+                    }
+                }
+            }
+
+            // 9. ESPERIENZA CALLIGRAFICA: SPESSORE REATTIVO ALLA VELOCITÀ DEL TRATTO
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xD914192E)),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.2.dp, Color(0x6600E5FF)),
+                modifier = Modifier.fillMaxWidth().testTag("calligraphy_speed_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = Color(0xFF00B0FF),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Draw,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Tratto Calligrafico Dinamico",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    text = "Spessore reattivo alla velocità della mano",
+                                    color = Color(0xFF80D8FF),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Toggle Switch: Spessore Reattivo alla Velocità
+                    Surface(
+                        color = Color(0x1A00E5FF),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0x3300E5FF)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Brush,
+                                    contentDescription = null,
+                                    tint = if (speedResponsivePenEnabled) Color(0xFF00E5FF) else Color.Gray,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Spessore Reattivo alla Velocità",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = if (speedResponsivePenEnabled) "Tratti veloci = linee sottili affusolate; lenti = spesse" else "Spessore costante uniforme",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = speedResponsivePenEnabled,
+                                onCheckedChange = { isEnabled ->
+                                    viewModel.setSpeedResponsivePenEnabled(isEnabled)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFF00E5FF),
+                                    uncheckedThumbColor = Color(0xFF888888),
+                                    uncheckedTrackColor = Color(0xFF333344)
+                                ),
+                                modifier = Modifier.testTag("speed_responsive_pen_toggle")
+                            )
+                        }
+                    }
+
+                    // Visual demonstration / preview banner
+                    Surface(
+                        color = Color(0x14FFFFFF),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0x22FFFFFF)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = Color(0xFFFFD54F),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Funziona sia sulla lavagna principale che sul widget fluttuante trasparente quando disegni con la Penna o selezioni lo stile Calligrafico.",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp
                             )
                         }
                     }

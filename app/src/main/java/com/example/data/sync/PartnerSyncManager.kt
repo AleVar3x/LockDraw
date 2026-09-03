@@ -44,6 +44,13 @@ enum class ConnectionStatus {
     SIMULATING_PARTNER
 }
 
+enum class CloudSyncState {
+    SYNCED,             // Sincronizzato con Firestore
+    SAVED_OFFLINE,      // Tratti salvati in locale offline
+    SYNCING,            // Sincronizzazione in corso
+    OFFLINE_WAITING     // Offline in attesa di connessione
+}
+
 data class PartnerPresence(
     val isOnline: Boolean = false,
     val isDrawing: Boolean = false,
@@ -788,7 +795,7 @@ class PartnerSyncManager(
                     lastActiveMillis = System.currentTimeMillis()
                 )
             }
-            is SyncAction.UserLayerSnapshot, is SyncAction.PlaceSticker -> {
+            is SyncAction.UserLayerSnapshot, is SyncAction.PlaceSticker, is SyncAction.EraseArea -> {
                 _partnerPresence.value = _partnerPresence.value.copy(
                     isOnline = true,
                     lastActiveMillis = System.currentTimeMillis()
@@ -950,9 +957,14 @@ class PartnerSyncManager(
         myStrokes: List<DrawingStroke>,
         myStickers: List<PlacedSticker>,
         wallpaperTheme: WallpaperTheme? = null,
-        currentLayerVersion: Long = 1L
+        currentLayerVersion: Long = 1L,
+        onResult: ((Boolean) -> Unit)? = null
     ) {
-        val db = firestore ?: return
+        val db = firestore
+        if (db == null) {
+            onResult?.invoke(false)
+            return
+        }
         val roomCode = _currentRoomCode.value
         val actionId = UUID.randomUUID().toString()
         recordProcessedAction(actionId)
@@ -1027,24 +1039,33 @@ class PartnerSyncManager(
                     updates["last_action_json"] = SyncActionSerializer.toJson(SyncAction.StrokeFinished(finishedStroke.copy(authorId = myDeviceId)))
                 }
 
-                db.collection("rooms").document(roomCode).update(updates).addOnFailureListener {
-                    // Fallback to set with merge if document doesn't exist yet
-                    db.collection("rooms").document(roomCode).set(
-                        mapOf(
-                            "layers" to mapOf(myDeviceId to myLayerData),
-                            "user_names" to mapOf(myDeviceId to _myName.value),
-                            "presence" to mapOf(myDeviceId to now),
-                            "presence_names" to mapOf(myDeviceId to _myName.value),
-                            "updated_by" to myDeviceId,
-                            "updatedAt" to now,
-                            "expiresAt" to (now + THREE_DAYS_MILLIS),
-                            "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
-                        ),
-                        SetOptions.merge()
-                    )
-                }
+                db.collection("rooms").document(roomCode).update(updates)
+                    .addOnSuccessListener {
+                        onResult?.invoke(true)
+                    }
+                    .addOnFailureListener {
+                        // Fallback to set with merge if document doesn't exist yet
+                        db.collection("rooms").document(roomCode).set(
+                            mapOf(
+                                "layers" to mapOf(myDeviceId to myLayerData),
+                                "user_names" to mapOf(myDeviceId to _myName.value),
+                                "presence" to mapOf(myDeviceId to now),
+                                "presence_names" to mapOf(myDeviceId to _myName.value),
+                                "updated_by" to myDeviceId,
+                                "updatedAt" to now,
+                                "expiresAt" to (now + THREE_DAYS_MILLIS),
+                                "ttl_timestamp" to Timestamp(Date(now + THREE_DAYS_MILLIS))
+                            ),
+                            SetOptions.merge()
+                        ).addOnSuccessListener {
+                            onResult?.invoke(true)
+                        }.addOnFailureListener {
+                            onResult?.invoke(false)
+                        }
+                    }
             } catch (e: Exception) {
                 Log.e("PartnerSync", "Error broadcasting canvas change to Firestore", e)
+                onResult?.invoke(false)
                 scheduleListenerReconnect(roomCode)
             }
         }
@@ -1070,6 +1091,7 @@ class PartnerSyncManager(
                 else -> 0xFFFF2A6D.toInt()
             }
             val brush = when (type) {
+                "watercolor" -> BrushType.WATERCOLOR
                 "neon" -> BrushType.NEON
                 "rainbow" -> BrushType.RAINBOW
                 "pencil" -> BrushType.PENCIL

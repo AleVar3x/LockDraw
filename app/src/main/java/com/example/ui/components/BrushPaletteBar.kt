@@ -28,13 +28,16 @@ import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BlurOn
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Highlight
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
@@ -74,9 +77,10 @@ data class BrushToolItem(
     val isPremium: Boolean = false
 )
 
-// Primary clean base brush tools with custom eraser icon
+// Primary clean base brush tools with custom eraser and watercolor icons
 val PRIMARY_BRUSH_TOOLS = listOf(
     BrushToolItem(BrushType.PEN, "Penna", icon = Icons.Default.Edit),
+    BrushToolItem(BrushType.WATERCOLOR, "Acquerello", iconResId = R.drawable.ic_watercolor_brush),
     BrushToolItem(BrushType.PENCIL, "Matita", icon = Icons.Default.Create),
     BrushToolItem(BrushType.HIGHLIGHTER, "Evidenziatore", icon = Icons.Default.Highlight),
     BrushToolItem(BrushType.NEON, "Neon Glow", icon = Icons.Default.AutoAwesome),
@@ -88,7 +92,8 @@ val PRIMARY_BRUSH_TOOLS = listOf(
 
 private fun getModifierIcon(modifier: StrokeModifier): ImageVector {
     return when (modifier) {
-        StrokeModifier.NONE -> Icons.Default.Gesture
+        StrokeModifier.NONE -> Icons.Default.Edit
+        StrokeModifier.CALLIGRAPHY -> Icons.Default.Gesture
         StrokeModifier.WAVE -> Icons.Default.Waves
         StrokeModifier.PULSING -> Icons.Default.Favorite
         StrokeModifier.SPARKLING -> Icons.Default.AutoAwesome
@@ -125,7 +130,7 @@ fun BrushPaletteBar(
             .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Expandable Slider Controls for Stroke Width & Opacity
+        // Expandable Slider Controls for Stroke Width & Opacity or Eraser Size
         AnimatedVisibility(
             visible = showSliders,
             enter = fadeIn() + expandVertically(),
@@ -134,75 +139,165 @@ fun BrushPaletteBar(
             Surface(
                 color = Color(0xE6141522),
                 shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, Color(0x40D0BCFF)),
+                border = BorderStroke(1.dp, if (selectedBrush == BrushType.ERASER) Color(0x6600E676) else Color(0x40D0BCFF)),
                 shadowElevation = 12.dp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    // Size Slider
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    if (selectedBrush == BrushType.ERASER) {
+                        // Dedicated Eraser Size Slider & Presets
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Dimensione Gomma: ${strokeWidth.toInt()}px",
+                                    color = Color(0xFFB9F6CA),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Cancellazione selettiva in tempo reale",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            // Live Eraser Circle Preview
+                            Box(
+                                modifier = Modifier
+                                    .size(strokeWidth.coerceIn(12f, 44f).dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0x3300E676))
+                                    .border(2.dp, Color(0xFF00E676), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(4.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Slider(
+                            value = strokeWidth,
+                            onValueChange = onSelectStrokeWidth,
+                            valueRange = 8f..80f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFF00E676),
+                                activeTrackColor = Color(0xFF00E676),
+                                inactiveTrackColor = Color(0x3300E676)
+                            ),
+                            modifier = Modifier.testTag("eraser_size_slider")
+                        )
+
+                        // Quick Eraser Size Presets
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf(
+                                Pair(12f, "Fine (12px)"),
+                                Pair(28f, "Medio (28px)"),
+                                Pair(48f, "Grande (48px)"),
+                                Pair(75f, "Max (75px)")
+                            ).forEach { (sizeVal, label) ->
+                                val isCurSize = (strokeWidth - sizeVal).let { it >= -3f && it <= 3f }
+                                Surface(
+                                    color = if (isCurSize) Color(0xFF00C853) else Color(0x2200E676),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, if (isCurSize) Color(0xFFB9F6CA) else Color(0x4400E676)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { onSelectStrokeWidth(sizeVal) }
+                                        .testTag("eraser_preset_${sizeVal.toInt()}")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isCurSize) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isCurSize) Color.White else Color(0xFFB9F6CA)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Standard Brush Size Slider
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Tratto: ${strokeWidth.toInt()}px",
+                                color = Color.White.copy(alpha = 0.95f),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            // Live dot preview
+                            Box(
+                                modifier = Modifier
+                                    .size(strokeWidth.coerceIn(4f, 32f).dp)
+                                    .clip(CircleShape)
+                                    .background(currentColor.copy(alpha = strokeAlpha))
+                                    .border(1.dp, Color(0x66FFFFFF), CircleShape)
+                            )
+                        }
+                        Slider(
+                            value = strokeWidth,
+                            onValueChange = onSelectStrokeWidth,
+                            valueRange = 4f..60f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFFD0BCFF),
+                                activeTrackColor = Color(0xFFD0BCFF),
+                                inactiveTrackColor = Color(0x33FFFFFF)
+                            ),
+                            modifier = Modifier.testTag("stroke_width_slider")
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Opacity Slider
                         Text(
-                            text = "Tratto: ${strokeWidth.toInt()}px",
+                            text = "Opacità: ${(strokeAlpha * 100).toInt()}%",
                             color = Color.White.copy(alpha = 0.95f),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
-                        // Live dot preview
-                        Box(
-                            modifier = Modifier
-                                .size(strokeWidth.coerceIn(4f, 32f).dp)
-                                .clip(CircleShape)
-                                .background(currentColor.copy(alpha = strokeAlpha))
-                                .border(1.dp, Color(0x66FFFFFF), CircleShape)
+                        Slider(
+                            value = strokeAlpha,
+                            onValueChange = onSelectStrokeAlpha,
+                            valueRange = 0.1f..1.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFFC2E7FF),
+                                activeTrackColor = Color(0xFFC2E7FF),
+                                inactiveTrackColor = Color(0x33FFFFFF)
+                            ),
+                            modifier = Modifier.testTag("stroke_opacity_slider")
                         )
                     }
-                    Slider(
-                        value = strokeWidth,
-                        onValueChange = onSelectStrokeWidth,
-                        valueRange = 4f..60f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFD0BCFF),
-                            activeTrackColor = Color(0xFFD0BCFF),
-                            inactiveTrackColor = Color(0x33FFFFFF)
-                        ),
-                        modifier = Modifier.testTag("stroke_width_slider")
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Opacity Slider
-                    Text(
-                        text = "Opacità: ${(strokeAlpha * 100).toInt()}%",
-                        color = Color.White.copy(alpha = 0.95f),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Slider(
-                        value = strokeAlpha,
-                        onValueChange = onSelectStrokeAlpha,
-                        valueRange = 0.1f..1.0f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFC2E7FF),
-                            activeTrackColor = Color(0xFFC2E7FF),
-                            inactiveTrackColor = Color(0x33FFFFFF)
-                        ),
-                        modifier = Modifier.testTag("stroke_opacity_slider")
-                    )
                 }
             }
         }
 
-        // Upper Control Bar: "Regola" button alongside the Stroke Style definition modifiers
+        // Upper Control Bar: Tune button alongside the Stroke Style modifiers / Eraser presets
         Surface(
             color = Color(0xF2161729),
             shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.2.dp, Color(0x44D0BCFF)),
+            border = BorderStroke(1.2.dp, if (selectedBrush == BrushType.ERASER) Color(0x6600E676) else Color(0x44D0BCFF)),
             shadowElevation = 10.dp,
             modifier = Modifier
                 .padding(bottom = 6.dp)
@@ -215,12 +310,12 @@ fun BrushPaletteBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // "Regola" button placed at the same level as the style definition
+                // Tune / Sliders toggle button without text
                 Surface(
-                    color = if (showSliders) Color(0xFF5E35B1) else Color(0x3325273C),
+                    color = if (showSliders) (if (selectedBrush == BrushType.ERASER) Color(0xFF00C853) else Color(0xFF5E35B1)) else Color(0x3325273C),
                     shape = RoundedCornerShape(14.dp),
                     border = if (showSliders) {
-                        BorderStroke(1.5.dp, Color(0xFFD0BCFF))
+                        BorderStroke(1.5.dp, if (selectedBrush == BrushType.ERASER) Color(0xFFB9F6CA) else Color(0xFFD0BCFF))
                     } else {
                         BorderStroke(1.dp, Color(0x26FFFFFF))
                     },
@@ -228,28 +323,21 @@ fun BrushPaletteBar(
                         .clickable { showSliders = !showSliders }
                         .testTag("toggle_sliders_btn")
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    Box(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Tune,
-                            contentDescription = "Regola Tratto",
-                            tint = if (showSliders) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = "Regola",
-                            fontSize = 11.sp,
-                            fontWeight = if (showSliders) FontWeight.Bold else FontWeight.Medium,
-                            color = if (showSliders) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.9f)
+                            contentDescription = "Regola Tratto o Gomma",
+                            tint = if (showSliders) Color.White else (if (selectedBrush == BrushType.ERASER) Color(0xFF69F0AE) else Color(0xFFD0BCFF)),
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
 
-                // If the active brush supports multiple modifiers, display them side-by-side
-                if (supportedModifiers.size > 1 && selectedBrush != BrushType.ERASER) {
+                // If Eraser is active, display quick size presets in the top bar directly
+                if (selectedBrush == BrushType.ERASER) {
                     Box(
                         modifier = Modifier
                             .height(20.dp)
@@ -257,12 +345,43 @@ fun BrushPaletteBar(
                             .background(Color(0x33FFFFFF))
                     )
 
-                    Text(
-                        text = "Stile:",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFD0BCFF),
-                        modifier = Modifier.padding(start = 2.dp, end = 2.dp)
+                    listOf(
+                        Pair(12f, "12px"),
+                        Pair(28f, "28px"),
+                        Pair(48f, "48px"),
+                        Pair(75f, "75px")
+                    ).forEach { (sizeVal, label) ->
+                        val isCurSize = (strokeWidth - sizeVal).let { it >= -3f && it <= 3f }
+                        Surface(
+                            color = if (isCurSize) Color(0xFF00C853) else Color(0x3325273C),
+                            shape = RoundedCornerShape(14.dp),
+                            border = if (isCurSize) {
+                                BorderStroke(1.5.dp, Color(0xFFB9F6CA))
+                            } else {
+                                BorderStroke(1.dp, Color(0x26FFFFFF))
+                            },
+                            modifier = Modifier
+                                .clickable { onSelectStrokeWidth(sizeVal) }
+                                .testTag("quick_eraser_size_${sizeVal.toInt()}")
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = if (isCurSize) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isCurSize) Color.White else Color(0xFFB9F6CA),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                // If the active brush supports multiple modifiers, display style icons
+                if (supportedModifiers.size > 1 && selectedBrush != BrushType.ERASER) {
+                    Box(
+                        modifier = Modifier
+                            .height(20.dp)
+                            .width(1.dp)
+                            .background(Color(0x33FFFFFF))
                     )
 
                     supportedModifiers.forEach { mod ->
@@ -288,34 +407,28 @@ fun BrushPaletteBar(
                                 .testTag("modifier_btn_${mod.name}")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
                                     imageVector = getModifierIcon(mod),
                                     contentDescription = mod.displayName,
-                                    tint = if (isModSelected) Color.White else if (isModLocked) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.8f),
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Text(
-                                    text = mod.displayName,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isModSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isModSelected) Color.White else if (isModLocked) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.9f)
+                                    tint = if (isModSelected) Color.White else if (isModLocked) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(16.dp)
                                 )
                                 if (isModLocked) {
                                     Surface(
                                         color = Color(0xFFFFD54F),
                                         shape = CircleShape,
-                                        modifier = Modifier.size(14.dp)
+                                        modifier = Modifier.size(12.dp)
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Icon(
                                                 imageVector = Icons.Default.Lock,
                                                 contentDescription = "VIP",
                                                 tint = Color(0xFF1A1C2E),
-                                                modifier = Modifier.size(8.dp)
+                                                modifier = Modifier.size(7.dp)
                                             )
                                         }
                                     }

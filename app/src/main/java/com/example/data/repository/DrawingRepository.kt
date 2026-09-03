@@ -19,12 +19,16 @@ import com.example.data.model.DrawingPoint
 import com.example.data.model.DrawingStroke
 import com.example.data.model.LockscreenConfig
 import com.example.data.model.PlacedSticker
+import com.example.data.model.StrokeModifier
 import com.example.data.model.WallpaperTheme
+import com.example.data.sync.CloudSyncState
 import com.example.data.sync.ConnectionStatus
 import com.example.data.sync.PartnerPresence
 import com.example.data.sync.PartnerSyncManager
 import com.example.data.sync.SyncAction
+import com.example.util.NetworkConnectivityMonitor
 import com.example.util.NotificationHelper
+import com.example.util.TactileFeedbackHelper
 import com.example.util.WallpaperHelper
 import com.example.widget.PartnerDrawingWidgetProvider
 import kotlinx.coroutines.CoroutineScope
@@ -110,11 +114,35 @@ class DrawingRepository private constructor(private val application: Application
     private val _selectedColor = MutableStateFlow(Color(0xFFD0BCFF))
     val selectedColor: StateFlow<Color> = _selectedColor.asStateFlow()
 
+    val defaultCustomPaletteColors = listOf(
+        Color(0xFFFF2A6D), // Neon Pink
+        Color(0xFFFF1744), // Crimson Red
+        Color(0xFFFF6D00), // Radiant Orange
+        Color(0xFFFFD600), // Golden Yellow
+        Color(0xFF00E676), // Vivid Emerald Green
+        Color(0xFF00E5FF), // Vivid Cyan
+        Color(0xFF2979FF), // Electric Blue
+        Color(0xFF7C4DFF), // Electric Violet
+        Color(0xFFD500F9), // Hyper Magenta
+        Color(0xFFFFFFFF), // Pure White
+        Color(0xFF101014)  // Pitch Black
+    )
+
+    private val _customColorPalette = MutableStateFlow<List<Color>>(loadCustomColorPalette())
+    val customColorPalette: StateFlow<List<Color>> = _customColorPalette.asStateFlow()
+
     private val _strokeWidth = MutableStateFlow(14f)
     val strokeWidth: StateFlow<Float> = _strokeWidth.asStateFlow()
 
+    private val _eraserSize = MutableStateFlow(prefs.getFloat("eraser_size", 28f))
+    val eraserSize: StateFlow<Float> = _eraserSize.asStateFlow()
+
     private val _strokeAlpha = MutableStateFlow(1.0f)
     val strokeAlpha: StateFlow<Float> = _strokeAlpha.asStateFlow()
+
+    // Calligraphic Speed-Responsive Pen line thickness state
+    private val _speedResponsivePenEnabled = MutableStateFlow(prefs.getBoolean("speed_responsive_pen_enabled", true))
+    val speedResponsivePenEnabled: StateFlow<Boolean> = _speedResponsivePenEnabled.asStateFlow()
 
     // Premium & Paywall state (4.99€ VIP)
     private val _isPremiumUnlocked = MutableStateFlow(prefs.getBoolean("is_premium_unlocked", false))
@@ -124,9 +152,25 @@ class DrawingRepository private constructor(private val application: Application
     private val _partnerNotificationsEnabled = MutableStateFlow(prefs.getBoolean("partner_notifications_enabled", true))
     val partnerNotificationsEnabled: StateFlow<Boolean> = _partnerNotificationsEnabled.asStateFlow()
 
+    // Brush-specific Haptic Vibration feedback state
+    private val _hapticFeedbackEnabled = MutableStateFlow(prefs.getBoolean("haptic_feedback_enabled", true))
+    val hapticFeedbackEnabled: StateFlow<Boolean> = _hapticFeedbackEnabled.asStateFlow()
+
     // WhatsApp-style Custom Stickers state
     private val _customStickers = MutableStateFlow<List<CustomStickerItem>>(emptyList())
     val customStickers: StateFlow<List<CustomStickerItem>> = _customStickers.asStateFlow()
+
+    // Offline Saving & Firestore Auto-Sync Engine
+    val networkMonitor = NetworkConnectivityMonitor(application, scope)
+    val isDeviceOnline: StateFlow<Boolean> = networkMonitor.isOnline
+
+    private val _cloudSyncState = MutableStateFlow(
+        if (networkMonitor.isOnline.value) CloudSyncState.SYNCED else CloudSyncState.SAVED_OFFLINE
+    )
+    val cloudSyncState: StateFlow<CloudSyncState> = _cloudSyncState.asStateFlow()
+
+    private val _hasUnsyncedStrokes = MutableStateFlow(false)
+    val hasUnsyncedStrokes: StateFlow<Boolean> = _hasUnsyncedStrokes.asStateFlow()
 
     // Lockscreen styling state
     private val _lockscreenConfig = MutableStateFlow(LockscreenConfig(wallpaperTheme = WallpaperTheme.FROSTED_GLASS))
@@ -175,6 +219,16 @@ class DrawingRepository private constructor(private val application: Application
     fun setPartnerNotificationsEnabled(enabled: Boolean) {
         _partnerNotificationsEnabled.value = enabled
         prefs.edit().putBoolean("partner_notifications_enabled", enabled).apply()
+    }
+
+    fun setHapticFeedbackEnabled(enabled: Boolean) {
+        _hapticFeedbackEnabled.value = enabled
+        prefs.edit().putBoolean("haptic_feedback_enabled", enabled).apply()
+    }
+
+    fun setSpeedResponsivePenEnabled(enabled: Boolean) {
+        _speedResponsivePenEnabled.value = enabled
+        prefs.edit().putBoolean("speed_responsive_pen_enabled", enabled).apply()
     }
 
     fun addCustomSticker(sticker: CustomStickerItem) {
@@ -286,10 +340,61 @@ class DrawingRepository private constructor(private val application: Application
         )
     }
 
+    /**
+     * Sincronizza i tratti locali con Firestore.
+     * Chiamata automaticamente al rilevamento della connessione o manualmente dall'utente.
+     */
+    fun syncUnsyncedChangesToFirestore(onDone: ((Boolean) -> Unit)? = null) {
+        if (!networkMonitor.isOnline.value) {
+            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+            onDone?.invoke(false)
+            return
+        }
+        _cloudSyncState.value = CloudSyncState.SYNCING
+        val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+        val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
+
+        syncManager.broadcastCanvasChange(
+            finishedStroke = null,
+            myStrokes = myStrokes,
+            myStickers = myStickers,
+            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
+            onResult = { success ->
+                scope.launch(Dispatchers.IO) {
+                    if (success) {
+                        _hasUnsyncedStrokes.value = false
+                        _cloudSyncState.value = CloudSyncState.SYNCED
+                        dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = false)
+                    } else {
+                        _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                    }
+                    onDone?.invoke(success)
+                }
+            }
+        )
+    }
+
     init {
+        TactileFeedbackHelper.init(application)
         _customStickers.value = loadCustomStickersFromPrefs()
         listenToIncomingSyncActions()
         loadPersistedSession(syncManager.currentRoomCode.value)
+
+        // Automatic auto-sync observer on connectivity changes
+        scope.launch {
+            networkMonitor.isOnline.collect { isOnline ->
+                if (isOnline) {
+                    syncManager.ensureActiveConnection(forceRefresh = true)
+                    if (_hasUnsyncedStrokes.value) {
+                        syncUnsyncedChangesToFirestore()
+                    } else {
+                        _cloudSyncState.value = CloudSyncState.SYNCED
+                    }
+                } else {
+                    _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                }
+            }
+        }
     }
 
     fun setFloatingServiceActive(active: Boolean) {
@@ -376,7 +481,9 @@ class DrawingRepository private constructor(private val application: Application
                     is SyncAction.StrokeFinished -> {
                         if (action.stroke.brushType == BrushType.ERASER) {
                             _partnerDraftStroke.value = null
-                            applyEraserPoints(action.stroke.points, action.stroke.strokeWidth)
+                            action.stroke.points.forEach { pt ->
+                                applySelectiveEraser(pt.x, pt.y, action.stroke.strokeWidth, broadcastRealtime = false)
+                            }
                             persistCurrentState()
                             handlePartnerUpdatedDrawing(null)
                         } else if (action.stroke.authorId != syncManager.myDeviceId) {
@@ -498,6 +605,11 @@ class DrawingRepository private constructor(private val application: Application
                         persistCurrentState()
                         handlePartnerUpdatedDrawing(null)
                     }
+                    is SyncAction.EraseArea -> {
+                        applySelectiveEraser(action.x, action.y, action.radius, broadcastRealtime = false)
+                        persistCurrentState()
+                        handlePartnerUpdatedDrawing(null)
+                    }
                     else -> {}
                 }
             }
@@ -528,28 +640,65 @@ class DrawingRepository private constructor(private val application: Application
         syncManager.ensureActiveConnection()
     }
 
+    private var eraserRealtimeSyncJob: kotlinx.coroutines.Job? = null
+
+    private fun scheduleEraserRealtimeSync() {
+        eraserRealtimeSyncJob?.cancel()
+        eraserRealtimeSyncJob = scope.launch {
+            kotlinx.coroutines.delay(100) // 100ms throttle during continuous drag
+            broadcastCurrentCanvasState()
+        }
+    }
+
+    fun broadcastCurrentCanvasState() {
+        val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
+        val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
+        syncManager.broadcastCanvasChange(
+            finishedStroke = null,
+            myStrokes = myStrokes,
+            myStickers = myStickers,
+            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
+        )
+        persistCurrentState()
+        PartnerDrawingWidgetProvider.updateAllWidgets(application)
+    }
+
     fun startDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
         saveSnapshotForUndo()
+        val isEraser = _selectedBrushType.value == BrushType.ERASER
+        val effectiveWidth = if (isEraser) _eraserSize.value else _strokeWidth.value
+        val effectiveModifier = if (_selectedBrushType.value == BrushType.PEN && _selectedModifier.value == StrokeModifier.NONE && _speedResponsivePenEnabled.value) {
+            StrokeModifier.CALLIGRAPHY
+        } else {
+            _selectedModifier.value
+        }
         val startPoint = DrawingPoint(normalizedX, normalizedY, pressure)
         val stroke = DrawingStroke(
             id = UUID.randomUUID().toString(),
             points = listOf(startPoint),
             colorArgb = _selectedColor.value.toArgb(),
-            strokeWidth = _strokeWidth.value,
+            strokeWidth = effectiveWidth,
             brushType = _selectedBrushType.value,
             authorId = syncManager.myDeviceId,
             alpha = _strokeAlpha.value,
-            modifier = _selectedModifier.value
+            modifier = effectiveModifier
         )
         _currentDraftStroke.value = stroke
 
-        if (stroke.brushType == BrushType.ERASER) {
-            applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value)
+        // Brush-specific vibration on stroke start
+        TactileFeedbackHelper.onStrokeStart(
+            brushType = stroke.brushType,
+            hapticsEnabled = _hapticFeedbackEnabled.value
+        )
+
+        if (isEraser) {
+            applySelectiveEraser(normalizedX, normalizedY, _eraserSize.value, broadcastRealtime = true)
         }
     }
 
     fun continueDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
         val current = _currentDraftStroke.value ?: return
+        val isEraser = current.brushType == BrushType.ERASER
         val lastPt = current.points.lastOrNull()
         if (lastPt != null) {
             val dx = normalizedX - lastPt.x
@@ -564,8 +713,14 @@ class DrawingRepository private constructor(private val application: Application
         val updatedStroke = current.copy(points = updatedPoints)
         _currentDraftStroke.value = updatedStroke
 
-        if (current.brushType == BrushType.ERASER) {
-            applyEraserPoint(normalizedX, normalizedY, _strokeWidth.value)
+        // Continuous subtle brush haptics while drawing
+        TactileFeedbackHelper.onStrokeMove(
+            brushType = current.brushType,
+            hapticsEnabled = _hapticFeedbackEnabled.value
+        )
+
+        if (isEraser) {
+            applySelectiveEraser(normalizedX, normalizedY, _eraserSize.value, broadcastRealtime = true)
         }
     }
 
@@ -576,22 +731,45 @@ class DrawingRepository private constructor(private val application: Application
         if (!isEraser) {
             _strokes.value = _strokes.value + finalStroke
         } else {
-            applyEraserPoints(finalStroke.points, finalStroke.strokeWidth)
+            finalStroke.points.forEach { pt ->
+                applySelectiveEraser(pt.x, pt.y, _eraserSize.value, broadcastRealtime = false)
+            }
         }
         _currentDraftStroke.value = null
 
         val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
         val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
 
-        syncManager.broadcastCanvasChange(
-            finishedStroke = if (!isEraser) finalStroke else null,
-            myStrokes = myStrokes,
-            myStickers = myStickers,
-            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
-        )
         redoHistory.clear()
-        persistCurrentState()
+        val isOnline = networkMonitor.isOnline.value
+        persistCurrentState(markUnsynced = !isOnline)
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
+
+        if (isOnline) {
+            _cloudSyncState.value = CloudSyncState.SYNCING
+            syncManager.broadcastCanvasChange(
+                finishedStroke = if (!isEraser) finalStroke else null,
+                myStrokes = myStrokes,
+                myStickers = myStickers,
+                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
+                onResult = { success ->
+                    scope.launch(Dispatchers.IO) {
+                        if (success) {
+                            _hasUnsyncedStrokes.value = false
+                            _cloudSyncState.value = CloudSyncState.SYNCED
+                            dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = false)
+                        } else {
+                            _hasUnsyncedStrokes.value = true
+                            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                            dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = true)
+                        }
+                    }
+                }
+            )
+        } else {
+            _hasUnsyncedStrokes.value = true
+            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+        }
     }
 
     private fun distanceSqToSegment(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
@@ -612,69 +790,204 @@ class DrawingRepository private constructor(private val application: Application
         return dpx * dpx + dpy * dpy
     }
 
-    private fun applyEraserPoint(x: Float, y: Float, eraserStrokeWidth: Float) {
-        val eraserRadius = (eraserStrokeWidth / 450f).coerceIn(0.035f, 0.16f)
+    fun applySelectiveEraser(x: Float, y: Float, eraserStrokeWidth: Float, broadcastRealtime: Boolean = true): Boolean {
+        val eraserRadius = (eraserStrokeWidth / 450f).coerceIn(0.015f, 0.22f)
+        var modified = false
 
-        _strokes.value = _strokes.value.filterNot { stroke ->
-            val strokeRadius = (stroke.strokeWidth / 900f).coerceIn(0.008f, 0.05f)
+        val currentStrokes = _strokes.value
+        val newStrokes = mutableListOf<DrawingStroke>()
+
+        for (stroke in currentStrokes) {
+            val strokeRadius = (stroke.strokeWidth / 900f).coerceIn(0.005f, 0.04f)
             val combinedRadius = eraserRadius + strokeRadius
             val combinedRadiusSq = combinedRadius * combinedRadius
 
             if (stroke.points.isEmpty()) {
-                false
-            } else if (stroke.points.size == 1) {
+                modified = true
+                continue
+            }
+
+            if (stroke.points.size == 1) {
                 val p = stroke.points[0]
                 val dx = p.x - x
                 val dy = p.y - y
-                (dx * dx + dy * dy) <= combinedRadiusSq
-            } else {
-                var intersects = false
-                for (i in 1 until stroke.points.size) {
-                    val p1 = stroke.points[i - 1]
-                    val p2 = stroke.points[i]
-                    if (distanceSqToSegment(x, y, p1.x, p1.y, p2.x, p2.y) <= combinedRadiusSq) {
-                        intersects = true
-                        break
+                if (dx * dx + dy * dy <= combinedRadiusSq) {
+                    modified = true
+                } else {
+                    newStrokes.add(stroke)
+                }
+                continue
+            }
+
+            val retainedRuns = mutableListOf<MutableList<DrawingPoint>>()
+            var currentRun = mutableListOf<DrawingPoint>()
+
+            for (i in stroke.points.indices) {
+                val p = stroke.points[i]
+                val dx = p.x - x
+                val dy = p.y - y
+                val isPointInside = (dx * dx + dy * dy) <= combinedRadiusSq
+
+                var segmentIntersects = false
+                if (i > 0) {
+                    val prev = stroke.points[i - 1]
+                    if (distanceSqToSegment(x, y, prev.x, prev.y, p.x, p.y) <= combinedRadiusSq) {
+                        segmentIntersects = true
                     }
                 }
-                intersects
+
+                if (isPointInside || segmentIntersects) {
+                    modified = true
+                    if (currentRun.isNotEmpty()) {
+                        retainedRuns.add(currentRun)
+                        currentRun = mutableListOf()
+                    }
+                } else {
+                    currentRun.add(p)
+                }
+            }
+            if (currentRun.isNotEmpty()) {
+                retainedRuns.add(currentRun)
+            }
+
+            if (retainedRuns.isEmpty()) {
+                modified = true
+            } else if (retainedRuns.size == 1 && retainedRuns[0].size == stroke.points.size) {
+                newStrokes.add(stroke)
+            } else {
+                modified = true
+                retainedRuns.forEachIndexed { segIdx, runPts ->
+                    newStrokes.add(
+                        stroke.copy(
+                            id = if (segIdx == 0) stroke.id else "${stroke.id}_$segIdx",
+                            points = runPts
+                        )
+                    )
+                }
             }
         }
 
         val stickerHitRadius = eraserRadius + 0.06f
         val stickerHitRadiusSq = stickerHitRadius * stickerHitRadius
-        _placedStickers.value = _placedStickers.value.filterNot { st ->
+        val originalStickers = _placedStickers.value
+        val filteredStickers = originalStickers.filterNot { st ->
             val dx = st.x - x
             val dy = st.y - y
             (dx * dx + dy * dy) <= stickerHitRadiusSq
         }
-    }
-
-    private fun applyEraserPoints(points: List<DrawingPoint>, strokeWidth: Float) {
-        if (points.isEmpty()) return
-        points.forEach { pt ->
-            applyEraserPoint(pt.x, pt.y, strokeWidth)
+        if (filteredStickers.size != originalStickers.size) {
+            modified = true
+            _placedStickers.value = filteredStickers
         }
+
+        if (modified) {
+            _strokes.value = newStrokes
+            if (broadcastRealtime) {
+                scheduleEraserRealtimeSync()
+            }
+        }
+        return modified
     }
 
     fun selectBrush(brushType: BrushType) {
         _selectedBrushType.value = brushType
+        if (brushType == BrushType.ERASER) {
+            _strokeWidth.value = _eraserSize.value
+        }
         val supported = brushType.getSupportedModifiers()
         if (_selectedModifier.value !in supported) {
             _selectedModifier.value = com.example.data.model.StrokeModifier.NONE
         }
+        TactileFeedbackHelper.onToolSelected(_hapticFeedbackEnabled.value)
     }
 
     fun selectModifier(modifier: com.example.data.model.StrokeModifier) {
         _selectedModifier.value = modifier
+        TactileFeedbackHelper.onToolSelected(_hapticFeedbackEnabled.value)
+    }
+
+    private fun loadCustomColorPalette(): List<Color> {
+        val raw = prefs.getString("custom_quick_colors_palette", null) ?: return defaultCustomPaletteColors
+        return try {
+            val jsonArray = JSONArray(raw)
+            val list = mutableListOf<Color>()
+            for (i in 0 until jsonArray.length()) {
+                val argbLong = jsonArray.getLong(i)
+                list.add(Color(argbLong.toInt()))
+            }
+            if (list.isEmpty()) defaultCustomPaletteColors else list
+        } catch (e: Exception) {
+            defaultCustomPaletteColors
+        }
+    }
+
+    private fun saveCustomColorPalette(colors: List<Color>) {
+        try {
+            val jsonArray = JSONArray()
+            colors.forEach { color ->
+                jsonArray.put(color.toArgb().toLong())
+            }
+            prefs.edit().putString("custom_quick_colors_palette", jsonArray.toString()).apply()
+        } catch (e: Exception) {
+            Log.e("DrawingRepository", "Error saving custom colors", e)
+        }
+    }
+
+    fun addColorToCustomPalette(color: Color) {
+        val current = _customColorPalette.value.toMutableList()
+        current.removeAll { it.toArgb() == color.toArgb() }
+        current.add(0, color)
+        val trimmed = if (current.size > 24) current.take(24) else current
+        _customColorPalette.value = trimmed
+        saveCustomColorPalette(trimmed)
+        TactileFeedbackHelper.onColorSelected(_hapticFeedbackEnabled.value)
+    }
+
+    fun removeColorFromCustomPalette(index: Int) {
+        val current = _customColorPalette.value.toMutableList()
+        if (index in current.indices) {
+            current.removeAt(index)
+            val updated = if (current.isEmpty()) defaultCustomPaletteColors else current
+            _customColorPalette.value = updated
+            saveCustomColorPalette(updated)
+        }
+    }
+
+    fun updateColorInCustomPalette(index: Int, newColor: Color) {
+        val current = _customColorPalette.value.toMutableList()
+        if (index in current.indices) {
+            current[index] = newColor
+            _customColorPalette.value = current
+            saveCustomColorPalette(current)
+            TactileFeedbackHelper.onColorSelected(_hapticFeedbackEnabled.value)
+        }
+    }
+
+    fun resetCustomColorPalette() {
+        _customColorPalette.value = defaultCustomPaletteColors
+        saveCustomColorPalette(defaultCustomPaletteColors)
     }
 
     fun selectColor(color: Color) {
         _selectedColor.value = color
+        TactileFeedbackHelper.onColorSelected(_hapticFeedbackEnabled.value)
     }
 
     fun setStrokeWidth(width: Float) {
-        _strokeWidth.value = width.coerceIn(2f, 70f)
+        val clamped = width.coerceIn(2f, 80f)
+        _strokeWidth.value = clamped
+        if (_selectedBrushType.value == BrushType.ERASER) {
+            setEraserSize(clamped)
+        }
+    }
+
+    fun setEraserSize(size: Float) {
+        val clamped = size.coerceIn(8f, 80f)
+        _eraserSize.value = clamped
+        prefs.edit().putFloat("eraser_size", clamped).apply()
+        if (_selectedBrushType.value == BrushType.ERASER) {
+            _strokeWidth.value = clamped
+        }
     }
 
     fun setStrokeAlpha(alpha: Float) {
@@ -695,16 +1008,41 @@ class DrawingRepository private constructor(private val application: Application
         _placedStickers.value = _placedStickers.value + sticker
         _selectedStickerId.value = sticker.id
 
+        // Tactile haptics
+        TactileFeedbackHelper.onStickerPlaced(_hapticFeedbackEnabled.value)
+
         val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
         val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
-        syncManager.broadcastCanvasChange(
-            finishedStroke = null,
-            myStrokes = myStrokes,
-            myStickers = myStickers,
-            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
-        )
-        persistCurrentState()
+
+        val isOnline = networkMonitor.isOnline.value
+        persistCurrentState(markUnsynced = !isOnline)
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
+
+        if (isOnline) {
+            _cloudSyncState.value = CloudSyncState.SYNCING
+            syncManager.broadcastCanvasChange(
+                finishedStroke = null,
+                myStrokes = myStrokes,
+                myStickers = myStickers,
+                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
+                onResult = { success ->
+                    scope.launch(Dispatchers.IO) {
+                        if (success) {
+                            _hasUnsyncedStrokes.value = false
+                            _cloudSyncState.value = CloudSyncState.SYNCED
+                            dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = false)
+                        } else {
+                            _hasUnsyncedStrokes.value = true
+                            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                            dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = true)
+                        }
+                    }
+                }
+            )
+        } else {
+            _hasUnsyncedStrokes.value = true
+            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+        }
     }
 
     private var stickerSyncJob: Job? = null
@@ -715,14 +1053,33 @@ class DrawingRepository private constructor(private val application: Application
             delay(150)
             val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
             val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
-            syncManager.broadcastCanvasChange(
-                finishedStroke = null,
-                myStrokes = myStrokes,
-                myStickers = myStickers,
-                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
-            )
-            persistCurrentState()
+            val isOnline = networkMonitor.isOnline.value
+            persistCurrentState(markUnsynced = !isOnline)
             PartnerDrawingWidgetProvider.updateAllWidgets(application)
+            if (isOnline) {
+                syncManager.broadcastCanvasChange(
+                    finishedStroke = null,
+                    myStrokes = myStrokes,
+                    myStickers = myStickers,
+                    wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
+                    onResult = { success ->
+                        scope.launch(Dispatchers.IO) {
+                            if (success) {
+                                _hasUnsyncedStrokes.value = false
+                                _cloudSyncState.value = CloudSyncState.SYNCED
+                                dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = false)
+                            } else {
+                                _hasUnsyncedStrokes.value = true
+                                _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                                dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = true)
+                            }
+                        }
+                    }
+                )
+            } else {
+                _hasUnsyncedStrokes.value = true
+                _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+            }
         }
     }
 
@@ -770,30 +1127,58 @@ class DrawingRepository private constructor(private val application: Application
         if (_selectedStickerId.value == id) _selectedStickerId.value = null
         val myStrokes = _strokes.value.filter { it.authorId == syncManager.myDeviceId }
         val myStickers = _placedStickers.value.filter { it.authorId == syncManager.myDeviceId }
-        syncManager.broadcastCanvasChange(
-            finishedStroke = null,
-            myStrokes = myStrokes,
-            myStickers = myStickers,
-            wallpaperTheme = _lockscreenConfig.value.wallpaperTheme
-        )
-        persistCurrentState()
+        val isOnline = networkMonitor.isOnline.value
+        persistCurrentState(markUnsynced = !isOnline)
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
+        if (isOnline) {
+            syncManager.broadcastCanvasChange(
+                finishedStroke = null,
+                myStrokes = myStrokes,
+                myStickers = myStickers,
+                wallpaperTheme = _lockscreenConfig.value.wallpaperTheme,
+                onResult = { success ->
+                    scope.launch(Dispatchers.IO) {
+                        if (success) {
+                            _hasUnsyncedStrokes.value = false
+                            _cloudSyncState.value = CloudSyncState.SYNCED
+                            dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = false)
+                        } else {
+                            _hasUnsyncedStrokes.value = true
+                            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                            dao.updateSyncStatus(syncManager.currentRoomCode.value, unsynced = true)
+                        }
+                    }
+                }
+            )
+        } else {
+            _hasUnsyncedStrokes.value = true
+            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+        }
     }
 
     fun clearAllCanvas() {
         if (_strokes.value.isEmpty() && _placedStickers.value.isEmpty()) return
         saveSnapshotForUndo()
+        TactileFeedbackHelper.onClearCanvas(_hapticFeedbackEnabled.value)
+
         // Clear all strokes and stickers across all layers
         _strokes.value = emptyList()
         _placedStickers.value = emptyList()
         _selectedStickerId.value = null
         _partnerDraftStroke.value = null
-        syncManager.broadcastAction(SyncAction.ClearAll)
-        persistCurrentState()
+        val isOnline = networkMonitor.isOnline.value
+        persistCurrentState(markUnsynced = !isOnline)
         PartnerDrawingWidgetProvider.updateAllWidgets(application)
+        if (isOnline) {
+            syncManager.broadcastAction(SyncAction.ClearAll)
+        } else {
+            _hasUnsyncedStrokes.value = true
+            _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+        }
     }
 
     fun undo() {
+        TactileFeedbackHelper.onUndoRedo(_hapticFeedbackEnabled.value)
         if (undoHistory.isNotEmpty()) {
             val lastState = undoHistory.removeAt(undoHistory.size - 1)
             redoHistory.add(CanvasSnapshot(_strokes.value, _placedStickers.value))
@@ -838,6 +1223,7 @@ class DrawingRepository private constructor(private val application: Application
     }
 
     fun redo() {
+        TactileFeedbackHelper.onUndoRedo(_hapticFeedbackEnabled.value)
         if (redoHistory.isNotEmpty()) {
             val nextState = redoHistory.removeAt(redoHistory.size - 1)
             undoHistory.add(CanvasSnapshot(_strokes.value, _placedStickers.value))
@@ -913,7 +1299,7 @@ class DrawingRepository private constructor(private val application: Application
         syncManager.triggerPartnerSimulatedSticker()
     }
 
-    private fun persistCurrentState() {
+    private fun persistCurrentState(markUnsynced: Boolean = !networkMonitor.isOnline.value) {
         val code = syncManager.currentRoomCode.value
         val config = _lockscreenConfig.value
         val strokesToSave = _strokes.value
@@ -925,7 +1311,8 @@ class DrawingRepository private constructor(private val application: Application
                     sessionCode = code,
                     title = "LockDraw-$code",
                     wallpaperThemeName = config.wallpaperTheme.name,
-                    customWallpaperUri = config.customWallpaperUri
+                    customWallpaperUri = config.customWallpaperUri,
+                    hasUnsyncedChanges = markUnsynced
                 )
 
                 val strokeEntities = strokesToSave.mapIndexed { idx, s ->
@@ -1032,6 +1419,17 @@ class DrawingRepository private constructor(private val application: Application
 
                     _strokes.value = loadedStrokes
                     _placedStickers.value = loadedStickers
+
+                    if (session.hasUnsyncedChanges) {
+                        _hasUnsyncedStrokes.value = true
+                        _cloudSyncState.value = CloudSyncState.SAVED_OFFLINE
+                        if (networkMonitor.isOnline.value) {
+                            syncUnsyncedChangesToFirestore()
+                        }
+                    } else {
+                        _hasUnsyncedStrokes.value = false
+                        _cloudSyncState.value = if (networkMonitor.isOnline.value) CloudSyncState.SYNCED else CloudSyncState.SAVED_OFFLINE
+                    }
                 }
             } catch (e: Exception) {
                 // Ignore load error

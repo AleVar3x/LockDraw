@@ -13,6 +13,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -20,10 +25,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,7 +39,10 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +68,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -113,7 +125,7 @@ fun DrawingCanvas(
         initialValue = 0f,
         targetValue = (2 * Math.PI).toFloat(),
         animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(1400, easing = androidx.compose.animation.core.LinearEasing),
+            animation = androidx.compose.animation.core.tween(5000, easing = androidx.compose.animation.core.LinearEasing),
             repeatMode = androidx.compose.animation.core.RepeatMode.Restart
         ),
         label = "wave_phase_val"
@@ -122,7 +134,7 @@ fun DrawingCanvas(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(1400, easing = androidx.compose.animation.core.LinearEasing),
+            animation = androidx.compose.animation.core.tween(2000, easing = androidx.compose.animation.core.LinearEasing),
             repeatMode = androidx.compose.animation.core.RepeatMode.Restart
         ),
         label = "dot_flow_val"
@@ -131,6 +143,14 @@ fun DrawingCanvas(
     val myAlphaMultiplier = if (isMyDrawingsTransparent) 0.20f else 1.0f
     val effectiveMyName = myName.ifBlank { "Tu" }
     val effectivePartnerName = partnerPresence.partnerName.ifBlank { partnerName.ifBlank { "Partner" } }
+
+    val currentOnStartDraw by rememberUpdatedState(onStartDraw)
+    val currentOnContinueDraw by rememberUpdatedState(onContinueDraw)
+    val currentOnFinishDraw by rememberUpdatedState(onFinishDraw)
+
+    // Pinch-to-zoom & two-finger panning state
+    var zoomScale by remember { mutableFloatStateOf(1.0f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
 
     BoxWithConstraints(
         modifier = modifier
@@ -144,194 +164,359 @@ fun DrawingCanvas(
         val sortedStrokes = remember(strokes) { strokes.sortedBy { it.createdAt } }
         val sortedStickers = remember(stickers) { stickers.sortedBy { it.createdAt } }
 
-        // --- 1. UNIFIED CHRONOLOGICAL DRAWING CANVAS ---
-        // Single unified canvas maintaining true progressive draw order across all layers
-        Canvas(
-            modifier = if (isInteractive) {
-                Modifier
-                    .fillMaxSize()
-                    .testTag("drawing_canvas")
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                val safeW = if (canvasWidth > 0f) canvasWidth else 1f
-                                val safeH = if (canvasHeight > 0f) canvasHeight else 1f
-                                val normX = (offset.x / safeW).coerceIn(0f, 1f)
-                                val normY = (offset.y / safeH).coerceIn(0f, 1f)
-                                onStartDraw(normX, normY)
-                            },
-                            onDrag = { change, _ ->
-                                change.consume()
-                                val safeW = if (canvasWidth > 0f) canvasWidth else 1f
-                                val safeH = if (canvasHeight > 0f) canvasHeight else 1f
-                                val normX = (change.position.x / safeW).coerceIn(0f, 1f)
-                                val normY = (change.position.y / safeH).coerceIn(0f, 1f)
-                                onContinueDraw(normX, normY)
-                            },
-                            onDragEnd = {
-                                onFinishDraw()
-                            },
-                            onDragCancel = {
-                                onFinishDraw()
+        // --- TRANSFORMABLE CANVAS CONTENT (Zoomed & Panned) ---
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = zoomScale
+                    scaleY = zoomScale
+                    translationX = panOffset.x
+                    translationY = panOffset.y
+                    transformOrigin = TransformOrigin(0f, 0f)
+                }
+        ) {
+            // --- 1. UNIFIED CHRONOLOGICAL DRAWING CANVAS ---
+            Canvas(
+                modifier = if (isInteractive) {
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("drawing_canvas")
+                        .pointerInput(canvasWidth, canvasHeight, isInteractive) {
+                            awaitEachGesture {
+                                val firstDown = awaitFirstDown(requireUnconsumed = false)
+                                var isDrawing = false
+                                var isMultiTouchTransforming = false
+
+                                val initialPressed = currentEvent.changes.filter { it.pressed }
+                                if (initialPressed.size >= 2) {
+                                    isMultiTouchTransforming = true
+                                } else {
+                                    val normX = ((firstDown.position.x - panOffset.x) / zoomScale / canvasWidth).coerceIn(0f, 1f)
+                                    val normY = ((firstDown.position.y - panOffset.y) / zoomScale / canvasHeight).coerceIn(0f, 1f)
+                                    currentOnStartDraw(normX, normY)
+                                    isDrawing = true
+                                    firstDown.consume()
+                                }
+
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pressed = event.changes.filter { it.pressed }
+                                    if (pressed.isEmpty()) break
+
+                                    if (pressed.size >= 2) {
+                                        if (isDrawing) {
+                                            currentOnFinishDraw()
+                                            isDrawing = false
+                                        }
+                                        isMultiTouchTransforming = true
+
+                                        val zoom = event.calculateZoom()
+                                        val pan = event.calculatePan()
+                                        val centroid = event.calculateCentroid(useCurrent = false)
+
+                                        if (zoom != 1f || pan != Offset.Zero) {
+                                            val oldScale = zoomScale
+                                            val newScale = (oldScale * zoom).coerceIn(1.0f, 6.0f)
+                                            val maxPanX = (newScale - 1f) * canvasWidth
+                                            val maxPanY = (newScale - 1f) * canvasHeight
+
+                                            val scaleRatio = newScale / oldScale
+                                            val newPanX = if (newScale <= 1.001f) 0f else {
+                                                (centroid.x - (centroid.x - panOffset.x) * scaleRatio + pan.x).coerceIn(-maxPanX, 0f)
+                                            }
+                                            val newPanY = if (newScale <= 1.001f) 0f else {
+                                                (centroid.y - (centroid.y - panOffset.y) * scaleRatio + pan.y).coerceIn(-maxPanY, 0f)
+                                            }
+
+                                            zoomScale = newScale
+                                            panOffset = if (newScale <= 1.001f) Offset.Zero else Offset(newPanX, newPanY)
+                                        }
+
+                                        event.changes.forEach { it.consume() }
+                                    } else if (pressed.size == 1 && !isMultiTouchTransforming) {
+                                        val change = pressed[0]
+                                        val normX = ((change.position.x - panOffset.x) / zoomScale / canvasWidth).coerceIn(0f, 1f)
+                                        val normY = ((change.position.y - panOffset.y) / zoomScale / canvasHeight).coerceIn(0f, 1f)
+
+                                        if (!isDrawing) {
+                                            currentOnStartDraw(normX, normY)
+                                            isDrawing = true
+                                        } else {
+                                            currentOnContinueDraw(normX, normY)
+                                        }
+                                        change.consume()
+                                    }
+                                }
+
+                                if (isDrawing) {
+                                    currentOnFinishDraw()
+                                }
                             }
+                        }
+                } else {
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("drawing_canvas")
+                }
+            ) {
+                // Render all strokes strictly by creation timestamp with smooth curves
+                sortedStrokes.forEach { stroke ->
+                    val isMyStroke = if (myDeviceId.isNotBlank()) stroke.authorId == myDeviceId else stroke.authorId != "partner"
+                    val alphaMult = if (isMyStroke) myAlphaMultiplier else 1.0f
+                    renderStroke(stroke, size.width, size.height, neonPulse, waveAnimationPhase, dotFlowPhase, alphaMult)
+                }
+
+                // Real-time live in-progress drafts
+                partnerDraft?.let { stroke ->
+                    renderStroke(stroke, size.width, size.height, neonPulse, waveAnimationPhase, dotFlowPhase, 1.0f)
+                }
+                currentDraft?.let { stroke ->
+                    renderStroke(stroke, size.width, size.height, neonPulse, waveAnimationPhase, dotFlowPhase, myAlphaMultiplier)
+                }
+            }
+
+            // --- 2. AUTHOR LABELS NEXT TO STROKES ---
+            val strokeAuthorBadges = remember(sortedStrokes, myDeviceId, effectiveMyName, effectivePartnerName) {
+                val nonEraserStrokes = sortedStrokes.filter { it.brushType != BrushType.ERASER && it.points.isNotEmpty() }
+                val myLast = nonEraserStrokes.lastOrNull { if (myDeviceId.isNotBlank()) it.authorId == myDeviceId else it.authorId != "partner" }
+                val partnerLast = nonEraserStrokes.lastOrNull { if (myDeviceId.isNotBlank()) it.authorId != myDeviceId else it.authorId == "partner" }
+                listOfNotNull(myLast, partnerLast).mapNotNull { s ->
+                    val lastPt = s.points.lastOrNull() ?: return@mapNotNull null
+                    val isMine = if (myDeviceId.isNotBlank()) s.authorId == myDeviceId else s.authorId != "partner"
+                    val name = if (isMine) effectiveMyName else effectivePartnerName
+                    StrokeBadgeInfo(
+                        strokeId = s.id,
+                        x = lastPt.x,
+                        y = lastPt.y,
+                        authorName = name,
+                        isMine = isMine,
+                        colorArgb = s.colorArgb
+                    )
+                }
+            }
+
+            strokeAuthorBadges.forEach { badge ->
+                val isMyStroke = badge.isMine
+                val alphaMult = if (isMyStroke) myAlphaMultiplier else 1.0f
+                val pxX = (badge.x * canvasWidth + 8f).coerceIn(8f, canvasWidth - 110f)
+                val pxY = (badge.y * canvasHeight - 16f).coerceIn(8f, canvasHeight - 36f)
+
+                Box(
+                    modifier = Modifier
+                        .offset { IntOffset(pxX.roundToInt(), pxY.roundToInt()) }
+                        .graphicsLayer { alpha = alphaMult * 0.9f }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .background(Color(0xDD121324), RoundedCornerShape(8.dp))
+                            .border(
+                                1.dp,
+                                if (badge.isMine) Color(0x667C4DFF) else Color(0x66FF2A6D),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(Color(badge.colorArgb))
+                        )
+                        Text(
+                            text = badge.authorName,
+                            color = if (badge.isMine) Color(0xFFD0BCFF) else Color(0xFFFF80AB),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
-            } else {
-                Modifier
-                    .fillMaxSize()
-                    .testTag("drawing_canvas")
-            }
-        ) {
-            // Render all strokes strictly by creation timestamp with smooth curves
-            sortedStrokes.forEach { stroke ->
-                val isMyStroke = if (myDeviceId.isNotBlank()) stroke.authorId == myDeviceId else stroke.authorId != "partner"
-                val alphaMult = if (isMyStroke) myAlphaMultiplier else 1.0f
-                renderStroke(stroke, size.width, size.height, neonPulse, waveAnimationPhase, dotFlowPhase, alphaMult)
+                }
             }
 
-            // Real-time live in-progress drafts
-            partnerDraft?.let { stroke ->
-                renderStroke(stroke, size.width, size.height, neonPulse, waveAnimationPhase, dotFlowPhase, 1.0f)
+            // Live Drawing Tag for Current User Draft
+            currentDraft?.points?.lastOrNull()?.let { curPt ->
+                if (currentDraft.brushType != BrushType.ERASER) {
+                    val livePxX = (curPt.x * canvasWidth + 14f).coerceIn(10f, canvasWidth - 90f)
+                    val livePxY = (curPt.y * canvasHeight - 20f).coerceIn(10f, canvasHeight - 40f)
+                    Box(
+                        modifier = Modifier
+                            .offset { IntOffset(livePxX.roundToInt(), livePxY.roundToInt()) }
+                            .graphicsLayer { alpha = 0.95f }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .background(Color(0xF07C4DFF), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = "✏️ $effectiveMyName",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
-            currentDraft?.let { stroke ->
-                renderStroke(stroke, size.width, size.height, neonPulse, waveAnimationPhase, dotFlowPhase, myAlphaMultiplier)
-            }
-        }
 
-        // --- 2. AUTHOR LABELS NEXT TO STROKES ---
-        // Display author tag beside the end of strokes to identify who drew what
-        // Apply label ONLY to the last stroke made by each author (non-cluttering & allows drawing over/under)
-        val strokeAuthorBadges = remember(sortedStrokes, myDeviceId, effectiveMyName, effectivePartnerName) {
-            val nonEraserStrokes = sortedStrokes.filter { it.brushType != BrushType.ERASER && it.points.isNotEmpty() }
-            val myLast = nonEraserStrokes.lastOrNull { if (myDeviceId.isNotBlank()) it.authorId == myDeviceId else it.authorId != "partner" }
-            val partnerLast = nonEraserStrokes.lastOrNull { if (myDeviceId.isNotBlank()) it.authorId != myDeviceId else it.authorId == "partner" }
-            listOfNotNull(myLast, partnerLast).mapNotNull { s ->
-                val lastPt = s.points.lastOrNull() ?: return@mapNotNull null
-                val isMine = if (myDeviceId.isNotBlank()) s.authorId == myDeviceId else s.authorId != "partner"
-                val name = if (isMine) effectiveMyName else effectivePartnerName
-                StrokeBadgeInfo(
-                    strokeId = s.id,
-                    x = lastPt.x,
-                    y = lastPt.y,
-                    authorName = name,
-                    isMine = isMine,
-                    colorArgb = s.colorArgb
+            // Live Drawing Tag for Partner Draft
+            partnerDraft?.points?.lastOrNull()?.let { pPt ->
+                if (partnerDraft.brushType != BrushType.ERASER) {
+                    val livePxX = (pPt.x * canvasWidth + 14f).coerceIn(10f, canvasWidth - 90f)
+                    val livePxY = (pPt.y * canvasHeight - 20f).coerceIn(10f, canvasHeight - 40f)
+                    Box(
+                        modifier = Modifier
+                            .offset { IntOffset(livePxX.roundToInt(), livePxY.roundToInt()) }
+                            .graphicsLayer { alpha = 0.95f }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .background(Color(0xF0FF2A6D), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = "✏️ $effectivePartnerName",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            // --- 3. PLACED STICKERS (Rendered in chronological sequence) ---
+            sortedStickers.forEach { sticker ->
+                val isMySticker = if (myDeviceId.isNotBlank()) sticker.authorId == myDeviceId else sticker.authorId != "partner"
+                val stickerAlpha = if (isMySticker) myAlphaMultiplier else 1.0f
+                PlacedStickerItem(
+                    sticker = sticker,
+                    isSelected = isInteractive && sticker.id == selectedStickerId,
+                    isInteractive = isInteractive,
+                    canvasWidth = canvasWidth,
+                    canvasHeight = canvasHeight,
+                    alphaMultiplier = stickerAlpha,
+                    onSelectSticker = onSelectSticker,
+                    onUpdateStickerPos = onUpdateStickerPos,
+                    onUpdateStickerDelta = onUpdateStickerDelta,
+                    onUpdateStickerTransform = onUpdateStickerTransform,
+                    onDeleteSticker = onDeleteSticker
                 )
             }
         }
 
-        strokeAuthorBadges.forEach { badge ->
-            val isMyStroke = badge.isMine
-            val alphaMult = if (isMyStroke) myAlphaMultiplier else 1.0f
-            val pxX = (badge.x * canvasWidth + 8f).coerceIn(8f, canvasWidth - 110f)
-            val pxY = (badge.y * canvasHeight - 16f).coerceIn(8f, canvasHeight - 36f)
-
-            Box(
+        // --- 4. PRECISION ZOOM & PAN HUD (Overlay on top of canvas) ---
+        if (isInteractive && zoomScale > 1.05f) {
+            Surface(
+                color = Color(0xEE121124),
+                shape = RoundedCornerShape(20.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x667C4DFF)),
+                shadowElevation = 8.dp,
                 modifier = Modifier
-                    .offset { IntOffset(pxX.roundToInt(), pxY.roundToInt()) }
-                    .graphicsLayer { alpha = alphaMult * 0.9f }
+                    .align(Alignment.TopCenter)
+                    .padding(top = 10.dp)
+                    .testTag("canvas_zoom_hud")
             ) {
                 Row(
-                    modifier = Modifier
-                        .background(Color(0xDD121324), RoundedCornerShape(8.dp))
-                        .border(
-                            1.dp,
-                            if (badge.isMine) Color(0x667C4DFF) else Color(0x66FF2A6D),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(Color(badge.colorArgb))
-                    )
-                    Text(
-                        text = badge.authorName,
-                        color = if (badge.isMine) Color(0xFFD0BCFF) else Color(0xFFFF80AB),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
+                    // Zoom Out Button
+                    IconButton(
+                        onClick = {
+                            val newScale = (zoomScale - 0.5f).coerceIn(1.0f, 6.0f)
+                            if (newScale <= 1.05f) {
+                                zoomScale = 1.0f
+                                panOffset = Offset.Zero
+                            } else {
+                                val maxPanX = (newScale - 1f) * canvasWidth
+                                val maxPanY = (newScale - 1f) * canvasHeight
+                                zoomScale = newScale
+                                panOffset = Offset(panOffset.x.coerceIn(-maxPanX, 0f), panOffset.y.coerceIn(-maxPanY, 0f))
+                            }
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ZoomOut,
+                            contentDescription = "Riduci zoom",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
 
-        // Live Drawing Tag for Current User Draft
-        currentDraft?.points?.lastOrNull()?.let { curPt ->
-            if (currentDraft.brushType != BrushType.ERASER) {
-                val livePxX = (curPt.x * canvasWidth + 14f).coerceIn(10f, canvasWidth - 90f)
-                val livePxY = (curPt.y * canvasHeight - 20f).coerceIn(10f, canvasHeight - 40f)
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset(livePxX.roundToInt(), livePxY.roundToInt()) }
-                        .graphicsLayer { alpha = 0.95f }
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .background(Color(0xF07C4DFF), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    // Zoom Percentage Badge
+                    Surface(
+                        color = Color(0xFF7C4DFF),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
-                            text = "✏️ $effectiveMyName",
+                            text = "🔍 ${(zoomScale * 100).roundToInt()}%",
                             color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
+                    }
+
+                    // Zoom In Button
+                    IconButton(
+                        onClick = {
+                            val newScale = (zoomScale + 0.5f).coerceIn(1.0f, 6.0f)
+                            val maxPanX = (newScale - 1f) * canvasWidth
+                            val maxPanY = (newScale - 1f) * canvasHeight
+                            zoomScale = newScale
+                            panOffset = Offset(panOffset.x.coerceIn(-maxPanX, 0f), panOffset.y.coerceIn(-maxPanY, 0f))
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ZoomIn,
+                            contentDescription = "Aumenta zoom",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    // Reset 1x Button
+                    Surface(
+                        color = Color(0x33FFFFFF),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .clickable {
+                                zoomScale = 1.0f
+                                panOffset = Offset.Zero
+                            }
+                            .testTag("reset_zoom_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FitScreen,
+                                contentDescription = null,
+                                tint = Color(0xFFD0BCFF),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "1x Reset",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
-        }
-
-        // Live Drawing Tag for Partner Draft
-        partnerDraft?.points?.lastOrNull()?.let { pPt ->
-            if (partnerDraft.brushType != BrushType.ERASER) {
-                val livePxX = (pPt.x * canvasWidth + 14f).coerceIn(10f, canvasWidth - 90f)
-                val livePxY = (pPt.y * canvasHeight - 20f).coerceIn(10f, canvasHeight - 40f)
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset(livePxX.roundToInt(), livePxY.roundToInt()) }
-                        .graphicsLayer { alpha = 0.95f }
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .background(Color(0xF0FF2A6D), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Text(
-                            text = "✏️ $effectivePartnerName",
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-        }
-
-        // --- 3. PLACED STICKERS (Rendered in chronological sequence) ---
-        sortedStickers.forEach { sticker ->
-            val isMySticker = if (myDeviceId.isNotBlank()) sticker.authorId == myDeviceId else sticker.authorId != "partner"
-            val stickerAlpha = if (isMySticker) myAlphaMultiplier else 1.0f
-            PlacedStickerItem(
-                sticker = sticker,
-                isSelected = isInteractive && sticker.id == selectedStickerId,
-                isInteractive = isInteractive,
-                canvasWidth = canvasWidth,
-                canvasHeight = canvasHeight,
-                alphaMultiplier = stickerAlpha,
-                onSelectSticker = onSelectSticker,
-                onUpdateStickerPos = onUpdateStickerPos,
-                onUpdateStickerDelta = onUpdateStickerDelta,
-                onUpdateStickerTransform = onUpdateStickerTransform,
-                onDeleteSticker = onDeleteSticker
-            )
         }
 
         // Real-time Partner Live Pointer / Cursor Indicator
@@ -341,8 +526,8 @@ fun DrawingCanvas(
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopStart)
         ) {
-            val partnerPxX = partnerPresence.cursorX * canvasWidth
-            val partnerPxY = partnerPresence.cursorY * canvasHeight
+            val partnerPxX = (partnerPresence.cursorX * canvasWidth * zoomScale + panOffset.x)
+            val partnerPxY = (partnerPresence.cursorY * canvasHeight * zoomScale + panOffset.y)
 
             Box(
                 modifier = Modifier
@@ -374,8 +559,8 @@ fun DrawingCanvas(
 
         // Floating Hearts / Reaction Bursts
         floatingReactions.forEach { reaction ->
-            val rx = reaction.x * canvasWidth
-            val ry = reaction.y * canvasHeight
+            val rx = (reaction.x * canvasWidth * zoomScale + panOffset.x)
+            val ry = (reaction.y * canvasHeight * zoomScale + panOffset.y)
 
             Box(
                 modifier = Modifier
@@ -481,17 +666,22 @@ private fun DrawScope.renderStroke(
         if (lastPt != null) {
             val cx = lastPt.x * canvasW
             val cy = lastPt.y * canvasH
-            val radius = ((effectiveStroke.strokeWidth / 450f).coerceIn(0.035f, 0.16f) * canvasW).coerceAtLeast(18f)
+            val radius = ((effectiveStroke.strokeWidth / 450f).coerceIn(0.015f, 0.22f) * canvasW).coerceAtLeast(10f)
             drawCircle(
-                color = Color.White.copy(alpha = (0.35f * alphaMultiplier).coerceIn(0.02f, 1f)),
+                color = Color(0x3300E676).copy(alpha = (0.25f * alphaMultiplier).coerceIn(0.02f, 1f)),
                 radius = radius,
                 center = Offset(cx, cy)
             )
             drawCircle(
-                color = Color(0xFFFF2A6D).copy(alpha = (1.0f * alphaMultiplier).coerceIn(0.05f, 1f)),
+                color = Color(0xFF00E676).copy(alpha = (0.95f * alphaMultiplier).coerceIn(0.05f, 1f)),
                 radius = radius,
                 center = Offset(cx, cy),
-                style = Stroke(width = 2.5f)
+                style = Stroke(width = 2.2f)
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = (0.8f * alphaMultiplier).coerceIn(0.05f, 1f)),
+                radius = 3f,
+                center = Offset(cx, cy)
             )
         }
         return
@@ -529,6 +719,28 @@ private fun DrawScope.renderStroke(
     val effectiveRainbowColors = rainbowColors.map { it.copy(alpha = it.alpha * scaledAlpha) }
 
     when (effectiveModifier) {
+        StrokeModifier.CALLIGRAPHY -> {
+            if (effectiveBrush == BrushType.WATERCOLOR) {
+                drawWatercolorStroke(
+                    stroke = effectiveStroke,
+                    canvasW = canvasW,
+                    canvasH = canvasH,
+                    baseColor = baseColor,
+                    scaledAlpha = scaledAlpha,
+                    effectiveRainbowColors = effectiveRainbowColors
+                )
+            } else {
+                drawCalligraphicStroke(
+                    stroke = effectiveStroke,
+                    canvasW = canvasW,
+                    canvasH = canvasH,
+                    baseColor = baseColor,
+                    scaledAlpha = scaledAlpha,
+                    effectiveRainbowColors = effectiveRainbowColors
+                )
+            }
+        }
+
         StrokeModifier.DOT_FLOW -> {
             if (effectiveBrush == BrushType.SPRAY) {
                 // Live Spray Flow: aerosol particles that smoothly stream and flow along the stroke trajectory
@@ -601,13 +813,19 @@ private fun DrawScope.renderStroke(
         StrokeModifier.WAVE -> {
             // Animated flowing sine wave along smoothed stroke length
             val animatedWavyPath = Path()
+            val wavyPointsList = ArrayList<DrawingPoint>()
             val smoothedPts = if (effectiveStroke.points.size > 2) smoothPoints(effectiveStroke.points) else effectiveStroke.points
             val firstPt = smoothedPts[0]
             animatedWavyPath.moveTo(firstPt.x * canvasW, firstPt.y * canvasH)
+            wavyPointsList.add(DrawingPoint(firstPt.x, firstPt.y, firstPt.pressure, firstPt.timestamp))
 
             var accumulatedDist = 0f
-            val frequency = 0.095f
-            val amplitude = (effectiveStroke.strokeWidth * 0.88f).coerceIn(6f, 26f)
+            val frequency = if (effectiveBrush == BrushType.WATERCOLOR) 0.028f else 0.055f
+            val amplitude = if (effectiveBrush == BrushType.WATERCOLOR) {
+                (effectiveStroke.strokeWidth * 0.35f).coerceIn(3.0f, 9.0f)
+            } else {
+                (effectiveStroke.strokeWidth * 0.70f).coerceIn(5f, 20f)
+            }
 
             for (i in 1 until smoothedPts.size) {
                 val p0 = smoothedPts[i - 1]
@@ -633,6 +851,17 @@ private fun DrawScope.renderStroke(
                     val ix = x0 + dx * t + perpX * waveOffset
                     val iy = y0 + dy * t + perpY * waveOffset
                     animatedWavyPath.lineTo(ix, iy)
+
+                    val interpPressure = p0.pressure + (p1.pressure - p0.pressure) * t
+                    val interpTimestamp = (p0.timestamp + ((p1.timestamp - p0.timestamp) * t).toLong())
+                    wavyPointsList.add(
+                        DrawingPoint(
+                            x = if (canvasW > 0f) ix / canvasW else 0f,
+                            y = if (canvasH > 0f) iy / canvasH else 0f,
+                            pressure = interpPressure,
+                            timestamp = interpTimestamp
+                        )
+                    )
                 }
                 accumulatedDist += segLen
             }
@@ -672,6 +901,20 @@ private fun DrawScope.renderStroke(
                         path = animatedWavyPath,
                         color = baseColor.copy(alpha = (scaledAlpha * 0.42f).coerceIn(0.01f, 1.0f)),
                         style = Stroke(width = stroke.strokeWidth * 2.2f, cap = StrokeCap.Square, join = StrokeJoin.Miter)
+                    )
+                }
+                BrushType.WATERCOLOR -> {
+                    // Organic Watercolor rendering along wavy undulating trajectory
+                    val wavyStroke = effectiveStroke.copy(
+                        points = if (wavyPointsList.size >= 2) wavyPointsList else effectiveStroke.points
+                    )
+                    drawWatercolorStroke(
+                        stroke = wavyStroke,
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = scaledAlpha,
+                        effectiveRainbowColors = effectiveRainbowColors
                     )
                 }
                 BrushType.PENCIL -> {
@@ -776,6 +1019,17 @@ private fun DrawScope.renderStroke(
                         )
                     )
                 }
+                BrushType.WATERCOLOR -> {
+                    val pulseScale = (0.75f + 0.25f * neonPulse).coerceIn(0.5f, 1.25f)
+                    drawWatercolorStroke(
+                        stroke = effectiveStroke.copy(strokeWidth = stroke.strokeWidth * pulseScale),
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = (scaledAlpha * pulseScale).coerceIn(0.01f, 1.0f),
+                        effectiveRainbowColors = effectiveRainbowColors
+                    )
+                }
                 BrushType.SPRAY -> {
                     drawSprayStroke(
                         stroke = effectiveStroke,
@@ -859,6 +1113,16 @@ private fun DrawScope.renderStroke(
                             cap = StrokeCap.Round,
                             join = StrokeJoin.Round
                         )
+                    )
+                }
+                BrushType.WATERCOLOR -> {
+                    drawWatercolorStroke(
+                        stroke = effectiveStroke,
+                        canvasW = canvasW,
+                        canvasH = canvasH,
+                        baseColor = baseColor,
+                        scaledAlpha = scaledAlpha,
+                        effectiveRainbowColors = effectiveRainbowColors
                     )
                 }
                 BrushType.PENCIL -> {
@@ -994,7 +1258,562 @@ private fun DrawScope.renderStroke(
 }
 
 /**
- * Authentic Microsoft Paint style Airbrush / Spray Can scatter renderer with optional dynamic Flow and Sparkling effects.
+ * Natural, fluid Calligraphic Pen Stroke renderer.
+ * Calculates drawing velocity between consecutive touch points:
+ * - Slower, deliberate strokes produce richer, thicker lines.
+ * - Faster, energetic strokes produce thinner, tapered flourishes.
+ * Smooths width transitions and renders continuous anti-aliased round-capped Bezier segments.
+ */
+private fun DrawScope.drawCalligraphicStroke(
+    stroke: DrawingStroke,
+    canvasW: Float,
+    canvasH: Float,
+    baseColor: Color,
+    scaledAlpha: Float,
+    effectiveRainbowColors: List<Color> = emptyList()
+) {
+    val rawPts = stroke.points
+    if (rawPts.isEmpty()) return
+    if (rawPts.size == 1) {
+        val pt = rawPts[0]
+        drawCircle(
+            color = baseColor,
+            radius = stroke.strokeWidth / 2f,
+            center = Offset(pt.x * canvasW, pt.y * canvasH)
+        )
+        return
+    }
+
+    val smoothedPts = if (rawPts.size > 2) smoothPoints(rawPts) else rawPts
+    val n = smoothedPts.size
+    if (n < 2) return
+
+    val screenPts = smoothedPts.map { Offset(it.x * canvasW, it.y * canvasH) }
+    val baseWidth = stroke.strokeWidth
+
+    // 1. Calculate instantaneous velocity at each point (pixels per millisecond)
+    val rawWidths = FloatArray(n)
+    for (i in 0 until n) {
+        val currPt = smoothedPts[i]
+        val v = if (i == 0) {
+            val nextPt = smoothedPts[1]
+            val dist = kotlin.math.hypot(screenPts[1].x - screenPts[0].x, screenPts[1].y - screenPts[0].y)
+            val dt = (nextPt.timestamp - currPt.timestamp).coerceIn(1L, 350L).toFloat()
+            dist / dt
+        } else {
+            val prevPt = smoothedPts[i - 1]
+            val dist = kotlin.math.hypot(screenPts[i].x - screenPts[i - 1].x, screenPts[i].y - screenPts[i - 1].y)
+            val dt = (currPt.timestamp - prevPt.timestamp).coerceIn(1L, 350L).toFloat()
+            dist / dt
+        }
+
+        // Calligraphic velocity-to-width mapping:
+        // Slower stroke (v ~ 0 px/ms) -> factor up to 1.35x
+        // Moderate stroke (v ~ 0.65 px/ms) -> factor ~ 0.85x
+        // Fast stroke (v > 2.0 px/ms) -> factor down to 0.28x
+        val speedFactor = (1.35f - 1.05f * (v / (v + 0.65f))).coerceIn(0.25f, 1.40f)
+        val pressureFactor = (0.75f + 0.25f * currPt.pressure).coerceIn(0.6f, 1.3f)
+        rawWidths[i] = (baseWidth * speedFactor * pressureFactor).coerceAtLeast(1.5f)
+    }
+
+    // 2. Smooth width transitions across adjacent points to eliminate sudden jumps
+    val widths = FloatArray(n)
+    widths[0] = rawWidths[0]
+    for (i in 1 until n) {
+        widths[i] = widths[i - 1] * 0.40f + rawWidths[i] * 0.60f
+    }
+    // Backward smoothing pass
+    for (i in n - 2 downTo 0) {
+        widths[i] = widths[i] * 0.70f + widths[i + 1] * 0.30f
+    }
+    // Natural tip tapering at the very start and finish
+    if (n >= 3) {
+        widths[0] = (widths[0] * 0.65f).coerceAtLeast(1.5f)
+        widths[n - 1] = (widths[n - 1] * 0.40f).coerceAtLeast(1.2f)
+    }
+
+    // 3. Render continuous variable-width quadratic Bezier curves
+    val isRainbow = stroke.brushType == BrushType.RAINBOW && effectiveRainbowColors.size >= 2
+    val rainbowBrush = if (isRainbow) {
+        Brush.linearGradient(
+            colors = effectiveRainbowColors,
+            start = Offset(0f, 0f),
+            end = Offset(canvasW, canvasH)
+        )
+    } else null
+
+    if (n == 2) {
+        val p0 = screenPts[0]
+        val p1 = screenPts[1]
+        val steps = 8
+        for (s in 0 until steps) {
+            val t0 = s.toFloat() / steps
+            val t1 = (s + 1).toFloat() / steps
+            val sp0 = Offset(p0.x + (p1.x - p0.x) * t0, p0.y + (p1.y - p0.y) * t0)
+            val sp1 = Offset(p0.x + (p1.x - p0.x) * t1, p0.y + (p1.y - p0.y) * t1)
+            val w = widths[0] + (widths[1] - widths[0]) * ((t0 + t1) * 0.5f)
+            if (rainbowBrush != null) {
+                drawLine(
+                    brush = rainbowBrush,
+                    start = sp0,
+                    end = sp1,
+                    strokeWidth = w,
+                    cap = StrokeCap.Round
+                )
+            } else {
+                drawLine(
+                    color = baseColor,
+                    start = sp0,
+                    end = sp1,
+                    strokeWidth = w,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+        return
+    }
+
+    // Connect quadratic Bezier segments between midpoints
+    for (i in 0 until n - 1) {
+        val p0 = screenPts[i]
+        val p1 = screenPts[i + 1]
+        val w0 = widths[i]
+        val w1 = widths[i + 1]
+
+        val startPt = if (i == 0) p0 else Offset((screenPts[i - 1].x + p0.x) * 0.5f, (screenPts[i - 1].y + p0.y) * 0.5f)
+        val endPt = if (i == n - 2) p1 else Offset((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f)
+        val ctrlPt = p0
+
+        val segSteps = 8
+        var prevSubPt = startPt
+        for (s in 1..segSteps) {
+            val t = s.toFloat() / segSteps
+            val invT = 1f - t
+            // Quadratic Bezier: B(t) = (1-t)^2 * start + 2*(1-t)*t * ctrl + t^2 * end
+            val subX = invT * invT * startPt.x + 2f * invT * t * ctrlPt.x + t * t * endPt.x
+            val subY = invT * invT * startPt.y + 2f * invT * t * ctrlPt.y + t * t * endPt.y
+            val currSubPt = Offset(subX, subY)
+            val curW = w0 + (w1 - w0) * t
+
+            if (rainbowBrush != null) {
+                drawLine(
+                    brush = rainbowBrush,
+                    start = prevSubPt,
+                    end = currSubPt,
+                    strokeWidth = curW,
+                    cap = StrokeCap.Round
+                )
+            } else {
+                drawLine(
+                    color = baseColor,
+                    start = prevSubPt,
+                    end = currSubPt,
+                    strokeWidth = curW,
+                    cap = StrokeCap.Round
+                )
+            }
+            prevSubPt = currSubPt
+        }
+    }
+}
+
+/**
+ * Authentic Organic Watercolor (Acquerello a Chiazze e Schizzi) renderer.
+ * Accurately replicates physical watercolor mechanics inspired by real ink/watercolor splatters:
+ * - Dark, intense wet-edge pigment rim (effetto coffee-ring / bordo bagnato scuro concentrato).
+ * - Soft, translucent, non-uniform watery interior (interno a macchie tenui e velature traslucide).
+ * - Non-linear, irregular organic contours and bleeding water lobes.
+ * - Dynamic water splatters & droplets (schizzi e goccioline d'acqua periferiche ad ogni tratto).
+ */
+private fun DrawScope.drawWatercolorStroke(
+    stroke: DrawingStroke,
+    canvasW: Float,
+    canvasH: Float,
+    baseColor: Color,
+    scaledAlpha: Float,
+    effectiveRainbowColors: List<Color> = emptyList()
+) {
+    val rawPts = stroke.points
+    if (rawPts.isEmpty()) return
+
+    val isRainbow = stroke.brushType == BrushType.RAINBOW && effectiveRainbowColors.size >= 2
+    val baseWidth = stroke.strokeWidth.coerceAtLeast(6f)
+    val baseRadius = baseWidth * 1.15f
+
+    // 1. Single tap / dab: Full Watercolor Splatter Stain (Macchia d'acqua con schizzi radiali)
+    if (rawPts.size == 1) {
+        val center = Offset(rawPts[0].x * canvasW, rawPts[0].y * canvasH)
+        val seed = ((rawPts[0].x * 31337 + rawPts[0].y * 7331).toLong() xor stroke.colorArgb.toLong())
+
+        // (A) Soft translucent interior puddle body
+        val stainPath = Path()
+        val numLobes = 12
+        var isFirst = true
+        for (i in 0 until numLobes) {
+            val angle = (i.toFloat() / numLobes) * 2f * Math.PI.toFloat()
+            val rVar = 0.55f + 0.65f * fastSprayRandomFloat(seed, i)
+            val lobeR = baseRadius * rVar
+            val px = center.x + kotlin.math.cos(angle) * lobeR
+            val py = center.y + kotlin.math.sin(angle) * lobeR
+            if (isFirst) {
+                stainPath.moveTo(px, py)
+                isFirst = false
+            } else {
+                stainPath.lineTo(px, py)
+            }
+        }
+        stainPath.close()
+
+        // 1. Pale inner water wash
+        drawPath(
+            path = stainPath,
+            color = baseColor.copy(alpha = (scaledAlpha * 0.18f).coerceIn(0.01f, 0.45f))
+        )
+
+        // 2. Soft mottled interior blotches (chiazze interne)
+        for (b in 0 until 5) {
+            val bAngle = fastSprayRandomFloat(seed, b + 50) * 2f * Math.PI.toFloat()
+            val bDist = baseRadius * 0.40f * fastSprayRandomFloat(seed, b + 60)
+            val bx = center.x + kotlin.math.cos(bAngle) * bDist
+            val by = center.y + kotlin.math.sin(bAngle) * bDist
+            val bRad = baseRadius * (0.35f + 0.35f * fastSprayRandomFloat(seed, b + 70))
+            drawCircle(
+                color = baseColor.copy(alpha = (scaledAlpha * 0.14f).coerceIn(0.01f, 0.35f)),
+                radius = bRad,
+                center = Offset(bx, by)
+            )
+        }
+
+        // 3. Intense dark wet-edge rim around the puddle perimeter (Bordo scuro concentrato)
+        drawPath(
+            path = stainPath,
+            color = baseColor.copy(alpha = (scaledAlpha * 0.85f).coerceIn(0.15f, 1.0f)),
+            style = Stroke(
+                width = (baseWidth * 0.18f).coerceIn(1.8f, 5.5f),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+
+        // (B) Bleeding arms (ramificazioni sbavate)
+        val numArms = 4 + (fastSprayRandomFloat(seed, 99) * 3).toInt()
+        for (a in 0 until numArms) {
+            val armAngle = fastSprayRandomFloat(seed, a + 100) * 2f * Math.PI.toFloat()
+            val armLen = baseRadius * (1.1f + 0.9f * fastSprayRandomFloat(seed, a + 110))
+            val armPath = Path()
+            armPath.moveTo(center.x, center.y)
+            val midX = center.x + kotlin.math.cos(armAngle + 0.15f) * (armLen * 0.6f)
+            val midY = center.y + kotlin.math.sin(armAngle + 0.15f) * (armLen * 0.6f)
+            val endX = center.x + kotlin.math.cos(armAngle) * armLen
+            val endY = center.y + kotlin.math.sin(armAngle) * armLen
+            armPath.quadraticTo(midX, midY, endX, endY)
+
+            // Soft arm wash
+            drawPath(
+                path = armPath,
+                color = baseColor.copy(alpha = (scaledAlpha * 0.35f).coerceIn(0.05f, 0.70f)),
+                style = Stroke(width = baseWidth * 0.45f, cap = StrokeCap.Round)
+            )
+            // Dark arm edge
+            drawPath(
+                path = armPath,
+                color = baseColor.copy(alpha = (scaledAlpha * 0.80f).coerceIn(0.15f, 1.0f)),
+                style = Stroke(width = (baseWidth * 0.14f).coerceAtLeast(1.5f), cap = StrokeCap.Round)
+            )
+        }
+
+        // (C) Water Splatters / Schizzi radiali attorno alla macchia
+        val numSplatters = 18 + (fastSprayRandomFloat(seed, 200) * 16).toInt()
+        for (s in 0 until numSplatters) {
+            val sAngle = fastSprayRandomFloat(seed, s + 300) * 2f * Math.PI.toFloat()
+            // Varied distance: some close to the rim, some shot far away
+            val distMul = if (s % 4 == 0) {
+                1.8f + 2.2f * fastSprayRandomFloat(seed, s + 400) // Far splatter
+            } else {
+                1.1f + 0.9f * fastSprayRandomFloat(seed, s + 400) // Near splatter
+            }
+            val sDist = baseRadius * distMul
+            val sx = center.x + kotlin.math.cos(sAngle) * sDist
+            val sy = center.y + kotlin.math.sin(sAngle) * sDist
+
+            val sRadius = if (s % 5 == 0) {
+                (baseWidth * 0.14f + 1.8f * fastSprayRandomFloat(seed, s + 500)).coerceIn(1.8f, 5.5f) // Medium drop
+            } else {
+                (baseWidth * 0.08f + 1.2f * fastSprayRandomFloat(seed, s + 500)).coerceIn(1.0f, 3.2f) // Fine micro-droplet
+            }
+
+            // High pigment density in droplets with soft micro-aura
+            drawCircle(
+                color = baseColor.copy(alpha = (scaledAlpha * 0.90f).coerceIn(0.20f, 1.0f)),
+                radius = sRadius,
+                center = Offset(sx, sy)
+            )
+            if (sRadius > 2.5f) {
+                drawCircle(
+                    color = baseColor.copy(alpha = (scaledAlpha * 0.30f).coerceIn(0.05f, 0.60f)),
+                    radius = sRadius * 1.5f,
+                    center = Offset(sx, sy)
+                )
+            }
+        }
+        return
+    }
+
+    // 2. Continuous stroke with Dark Wet-Edge, Translucent Interior Wash, and Dynamic Splatters
+    val smoothedPts = if (rawPts.size > 2) smoothPoints(rawPts) else rawPts
+    val n = smoothedPts.size
+    if (n < 2) return
+
+    val screenPts = smoothedPts.map { Offset(it.x * canvasW, it.y * canvasH) }
+
+    // Segment lengths and stroke geometry
+    val segLengths = FloatArray(n - 1)
+    var totalLength = 0f
+    for (i in 0 until n - 1) {
+        val len = kotlin.math.hypot(screenPts[i + 1].x - screenPts[i].x, screenPts[i + 1].y - screenPts[i].y)
+        segLengths[i] = len
+        totalLength += len
+    }
+
+    if (totalLength <= 0.5f) {
+        drawCircle(
+            color = baseColor.copy(alpha = (scaledAlpha * 0.4f).coerceIn(0.01f, 1.0f)),
+            radius = baseRadius,
+            center = screenPts[0]
+        )
+        return
+    }
+
+    // Prepare left/right edge paths for dark wet-edge rim
+    val leftRimPath = Path()
+    val rightRimPath = Path()
+    val interiorWashPath = Path()
+
+    val stepSpacing = (baseRadius * 0.28f).coerceIn(2.5f, 14f)
+    var currentDist = 0f
+    var segIdx = 0
+    var distInSeg = 0f
+    var sampleIdx = 0
+
+    val leftBoundary = ArrayList<Offset>()
+    val rightBoundary = ArrayList<Offset>()
+    val centerSamples = ArrayList<Offset>()
+    val radiiSamples = ArrayList<Float>()
+    val colorSamples = ArrayList<Color>()
+
+    val strokeSeed = (stroke.id.hashCode().toLong() xor stroke.colorArgb.toLong())
+
+    while (currentDist <= totalLength) {
+        while (segIdx < n - 2 && distInSeg > segLengths[segIdx]) {
+            distInSeg -= segLengths[segIdx]
+            segIdx++
+        }
+
+        val p0 = screenPts[segIdx]
+        val p1 = screenPts[segIdx + 1]
+        val segLen = segLengths[segIdx]
+        val segFrac = if (segLen > 0.001f) (distInSeg / segLen).coerceIn(0f, 1f) else 0f
+
+        val posX = p0.x + (p1.x - p0.x) * segFrac
+        val posY = p0.y + (p1.y - p0.y) * segFrac
+
+        val dirX = if (segLen > 0.001f) (p1.x - p0.x) / segLen else 1f
+        val dirY = if (segLen > 0.001f) (p1.y - p0.y) / segLen else 0f
+        val normX = -dirY
+        val normY = dirX
+
+        // Dynamic velocity & pressure water deposit factor
+        val pt0 = smoothedPts[segIdx]
+        val pt1 = smoothedPts[segIdx + 1]
+        val dt = (pt1.timestamp - pt0.timestamp).coerceIn(1L, 400L).toFloat()
+        val velocity = if (dt > 0f) segLen / dt else 0.5f
+        val flowFactor = (1.25f - 0.65f * (velocity / (velocity + 0.6f))).coerceIn(0.55f, 1.45f)
+        val pressure = pt0.pressure + (pt1.pressure - pt0.pressure) * segFrac
+        val pressFactor = (0.75f + 0.25f * pressure).coerceIn(0.65f, 1.35f)
+
+        val activeRadius = baseRadius * flowFactor * pressFactor
+        val seed = ((posX * 1000f + posY * 733f + sampleIdx * 137f).toLong() xor strokeSeed)
+
+        // Rainbow color interpolation if active
+        val currentColor = if (isRainbow) {
+            val progress = (currentDist / totalLength).coerceIn(0f, 0.999f)
+            val colorIdx = (progress * (effectiveRainbowColors.size - 1)).toInt()
+            val nextIdx = (colorIdx + 1).coerceAtMost(effectiveRainbowColors.size - 1)
+            val subFrac = (progress * (effectiveRainbowColors.size - 1)) - colorIdx
+            val c1 = effectiveRainbowColors[colorIdx]
+            val c2 = effectiveRainbowColors[nextIdx]
+            Color(
+                red = c1.red + (c2.red - c1.red) * subFrac,
+                green = c1.green + (c2.green - c1.green) * subFrac,
+                blue = c1.blue + (c2.blue - c1.blue) * subFrac,
+                alpha = c1.alpha + (c2.alpha - c1.alpha) * subFrac
+            )
+        } else baseColor
+
+        // Organic non-linear undulating left & right borders (wavy puddle contours)
+        val leftUndulation = (0.75f + 0.55f * fastSprayRandomFloat(seed, 1))
+        val rightUndulation = (0.75f + 0.55f * fastSprayRandomFloat(seed, 2))
+
+        val leftOffsetDist = activeRadius * leftUndulation
+        val rightOffsetDist = activeRadius * rightUndulation
+
+        val leftPt = Offset(posX + normX * leftOffsetDist, posY + normY * leftOffsetDist)
+        val rightPt = Offset(posX - normX * rightOffsetDist, posY - normY * rightOffsetDist)
+
+        leftBoundary.add(leftPt)
+        rightBoundary.add(rightPt)
+        centerSamples.add(Offset(posX, posY))
+        radiiSamples.add(activeRadius)
+        colorSamples.add(currentColor)
+
+        // (D) Dynamic Splatters & Droplets generated along the stroke path
+        // Spawn probability increases with speed and organic variance
+        if (fastSprayRandomFloat(seed, 10) > 0.40f) {
+            val isLeft = fastSprayRandomFloat(seed, 11) > 0.5f
+            val sideSign = if (isLeft) 1f else -1f
+            val baseSideOffset = if (isLeft) leftOffsetDist else rightOffsetDist
+
+            // Splatter distance: shoots outward from the wet edge
+            val splatterDist = baseSideOffset + activeRadius * (0.35f + 1.75f * fastSprayRandomFloat(seed, 12))
+            val splatterAngleDrift = (fastSprayRandomFloat(seed, 13) - 0.5f) * 0.65f
+            val splatterNormX = normX * kotlin.math.cos(splatterAngleDrift) - normY * kotlin.math.sin(splatterAngleDrift)
+            val splatterNormY = normX * kotlin.math.sin(splatterAngleDrift) + normY * kotlin.math.cos(splatterAngleDrift)
+
+            val spX = posX + splatterNormX * (sideSign * splatterDist)
+            val spY = posY + splatterNormY * (sideSign * splatterDist)
+
+            val spRadius = if (fastSprayRandomFloat(seed, 14) > 0.82f) {
+                (baseWidth * 0.12f + 1.8f * fastSprayRandomFloat(seed, 15)).coerceIn(1.8f, 5.0f) // Satellite drop
+            } else {
+                (baseWidth * 0.07f + 1.1f * fastSprayRandomFloat(seed, 15)).coerceIn(0.9f, 2.8f) // Micro droplet
+            }
+
+            // Dark intense splatter droplet
+            drawCircle(
+                color = currentColor.copy(alpha = (scaledAlpha * 0.88f).coerceIn(0.20f, 1.0f)),
+                radius = spRadius,
+                center = Offset(spX, spY)
+            )
+            // Delicate outer water halo for larger drops
+            if (spRadius > 2.2f) {
+                drawCircle(
+                    color = currentColor.copy(alpha = (scaledAlpha * 0.25f).coerceIn(0.04f, 0.50f)),
+                    radius = spRadius * 1.45f,
+                    center = Offset(spX, spY)
+                )
+            }
+        }
+
+        currentDist += stepSpacing
+        distInSeg += stepSpacing
+        sampleIdx++
+    }
+
+    if (leftBoundary.isEmpty() || rightBoundary.isEmpty()) return
+
+    // 1. Build the full non-linear watercolor puddle polygon (interior body)
+    interiorWashPath.moveTo(leftBoundary[0].x, leftBoundary[0].y)
+    for (i in 1 until leftBoundary.size) {
+        val prev = leftBoundary[i - 1]
+        val curr = leftBoundary[i]
+        interiorWashPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+    }
+    interiorWashPath.lineTo(leftBoundary.last().x, leftBoundary.last().y)
+
+    // Connect to right boundary in reverse
+    interiorWashPath.lineTo(rightBoundary.last().x, rightBoundary.last().y)
+    for (i in rightBoundary.size - 2 downTo 0) {
+        val prev = rightBoundary[i + 1]
+        val curr = rightBoundary[i]
+        interiorWashPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+    }
+    interiorWashPath.lineTo(rightBoundary[0].x, rightBoundary[0].y)
+    interiorWashPath.close()
+
+    // 2. Draw Soft Translucent Interior Water Wash (Velatura interna tenue a macchie)
+    drawPath(
+        path = interiorWashPath,
+        color = baseColor.copy(alpha = (scaledAlpha * 0.16f).coerceIn(0.01f, 0.38f))
+    )
+
+    // 3. Draw Interior Mottled Puddles (Macchie tenui sparse verso l'interno)
+    val mottledStep = (centerSamples.size / 15).coerceIn(1, 4)
+    for (i in 0 until centerSamples.size step mottledStep) {
+        val centerPt = centerSamples[i]
+        val rad = radiiSamples[i]
+        val col = colorSamples[i]
+        val sSeed = strokeSeed xor (i * 271L)
+
+        val puddleOffX = (fastSprayRandomFloat(sSeed, 30) - 0.5f) * rad * 0.45f
+        val puddleOffY = (fastSprayRandomFloat(sSeed, 31) - 0.5f) * rad * 0.45f
+        val puddleRad = rad * (0.45f + 0.45f * fastSprayRandomFloat(sSeed, 32))
+        val puddleAlpha = (scaledAlpha * (0.08f + 0.10f * fastSprayRandomFloat(sSeed, 33))).coerceIn(0.01f, 0.32f)
+
+        drawCircle(
+            color = col.copy(alpha = puddleAlpha),
+            radius = puddleRad,
+            center = Offset(centerPt.x + puddleOffX, centerPt.y + puddleOffY)
+        )
+    }
+
+    // 4. Draw Intense Dark Wet-Edge Rim on Left & Right Boundaries (Bordo scuro intenso / Coffee-ring effect)
+    leftRimPath.moveTo(leftBoundary[0].x, leftBoundary[0].y)
+    for (i in 1 until leftBoundary.size) {
+        val prev = leftBoundary[i - 1]
+        val curr = leftBoundary[i]
+        leftRimPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+    }
+    leftRimPath.lineTo(leftBoundary.last().x, leftBoundary.last().y)
+
+    rightRimPath.moveTo(rightBoundary[0].x, rightBoundary[0].y)
+    for (i in 1 until rightBoundary.size) {
+        val prev = rightBoundary[i - 1]
+        val curr = rightBoundary[i]
+        rightRimPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+    }
+    rightRimPath.lineTo(rightBoundary.last().x, rightBoundary.last().y)
+
+    val rimStrokeWidth = (baseWidth * 0.18f).coerceIn(1.8f, 5.0f)
+    val rimAlpha = (scaledAlpha * 0.85f).coerceIn(0.18f, 1.0f)
+
+    drawPath(
+        path = leftRimPath,
+        color = baseColor.copy(alpha = rimAlpha),
+        style = Stroke(width = rimStrokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+    drawPath(
+        path = rightRimPath,
+        color = baseColor.copy(alpha = rimAlpha),
+        style = Stroke(width = rimStrokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+
+    // Soft cap edges at start and end of stroke
+    drawCircle(
+        color = baseColor.copy(alpha = rimAlpha),
+        radius = (rimStrokeWidth * 0.9f).coerceAtLeast(2f),
+        center = leftBoundary.first()
+    )
+    drawCircle(
+        color = baseColor.copy(alpha = rimAlpha),
+        radius = (rimStrokeWidth * 0.9f).coerceAtLeast(2f),
+        center = rightBoundary.last()
+    )
+}
+
+/**
+ * High-performance, allocation-free pseudo-random float generator for real-time rendering.
+ */
+private inline fun fastSprayRandomFloat(seed: Long, index: Int): Float {
+    var x = seed xor (index.toLong() * 0x9E3779B97F4A7C15UL.toLong())
+    x = (x xor (x ushr 30)) * 0xBF58476D1CE4E5B9UL.toLong()
+    x = (x xor (x ushr 27)) * 0x94D049BB133111EBUL.toLong()
+    x = x xor (x ushr 31)
+    return ((x and 0x7FFFFFFF).toFloat()) / 0x7FFFFFFF.toFloat()
+}
+
+/**
+ * High-Performance Microsoft Paint style Airbrush / Spray Can scatter renderer
+ * Optimized with distance-based stride subsampling, zero-allocation math, and lightweight shader effects.
  */
 private fun DrawScope.drawSprayStroke(
     stroke: DrawingStroke,
@@ -1010,141 +1829,308 @@ private fun DrawScope.drawSprayStroke(
 ) {
     if (stroke.points.isEmpty()) return
     val pts = stroke.points
-    val baseRadius = (stroke.strokeWidth * 1.5f).coerceIn(12f, 65f)
-    val effectiveRadius = if (isPulsing) baseRadius * (0.8f + 0.45f * neonPulse) else baseRadius
-
-    // Seed generator from stroke ID to guarantee stable, deterministic scatter without flickering on recomposition
+    val baseRadius = (stroke.strokeWidth * 1.4f).coerceIn(10f, 60f)
+    val effectiveRadius = if (isPulsing) baseRadius * (0.85f + 0.35f * neonPulse) else baseRadius
     val seed = stroke.id.hashCode().toLong()
-    val random = java.util.Random(seed)
+    val dotSizeBase = (stroke.strokeWidth * 0.11f).coerceIn(1.1f, 2.8f)
 
-    // Number of dots per sample stamp
-    val dotsPerStamp = (stroke.strokeWidth * 1.6f).toInt().coerceIn(18, 48)
-    val dotSizeBase = (stroke.strokeWidth * 0.12f).coerceIn(1.2f, 3.2f)
+    if (isFlow) {
+        // Continuous fluid spray flow along the path in stroke order (from start to end)
+        val pathPts = if (pts.size > 2) smoothPoints(pts) else pts
+        val screenPts = pathPts.map { Offset(it.x * canvasW, it.y * canvasH) }
+        val n = screenPts.size
 
-    for (i in pts.indices) {
-        val p0 = pts[i]
-        val x0 = p0.x * canvasW
-        val y0 = p0.y * canvasH
+        if (n <= 1) {
+            val cx = pts[0].x * canvasW
+            val cy = pts[0].y * canvasH
+            drawCircle(
+                color = baseColor.copy(alpha = scaledAlpha * 0.6f),
+                radius = effectiveRadius * 0.8f,
+                center = Offset(cx, cy)
+            )
+            return
+        }
 
-        // If there's a previous point, interpolate intermediate spray stamps for fluid stroke coverage
-        val steps = if (i > 0) {
-            val pPrev = pts[i - 1]
-            val dist = kotlin.math.hypot((p0.x - pPrev.x) * canvasW, (p0.y - pPrev.y) * canvasH)
-            (dist / (effectiveRadius * 0.40f)).toInt().coerceIn(1, 18)
-        } else 1
+        // Calculate cumulative segment distances along the path
+        val cumDist = FloatArray(n)
+        cumDist[0] = 0f
+        for (i in 1 until n) {
+            val dx = screenPts[i].x - screenPts[i - 1].x
+            val dy = screenPts[i].y - screenPts[i - 1].y
+            cumDist[i] = cumDist[i - 1] + kotlin.math.hypot(dx, dy)
+        }
+        val totalLength = cumDist[n - 1]
+        if (totalLength <= 1f) return
 
-        val pPrev = if (i > 0) pts[i - 1] else p0
-        val prevX = pPrev.x * canvasW
-        val prevY = pPrev.y * canvasH
+        // 1. Subtle stable underlying spray mist so the stroke remains visible as drawn
+        val baseStepStride = (effectiveRadius * 0.50f).coerceAtLeast(6f)
+        val baseClusterCount = (totalLength / baseStepStride).toInt().coerceIn(3, 120)
+        for (b in 0..baseClusterCount) {
+            val distAlong = (b.toFloat() / baseClusterCount) * totalLength
+            var sIdx = 0
+            while (sIdx < n - 2 && cumDist[sIdx + 1] < distAlong) sIdx++
+            val sStart = cumDist[sIdx]
+            val sEnd = cumDist[sIdx + 1]
+            val segLen = (sEnd - sStart).coerceAtLeast(0.001f)
+            val u = ((distAlong - sStart) / segLen).coerceIn(0f, 1f)
+            val bx = screenPts[sIdx].x + (screenPts[sIdx + 1].x - screenPts[sIdx].x) * u
+            val by = screenPts[sIdx].y + (screenPts[sIdx + 1].y - screenPts[sIdx].y) * u
 
-        for (s in 0 until steps) {
-            val t = if (steps > 1) (s + 1).toFloat() / steps else 1f
-            val cx = prevX + (x0 - prevX) * t
-            val cy = prevY + (y0 - prevY) * t
-
-            // If pulsing, draw a soft glowing breathing aerosol halo aura under the spray stamp
-            if (isPulsing) {
+            val baseDots = (stroke.strokeWidth * 0.65f).toInt().coerceIn(6, 16)
+            for (bd in 0 until baseDots) {
+                val r1 = fastSprayRandomFloat(seed, b * 31 + bd * 3)
+                val r2 = fastSprayRandomFloat(seed, b * 31 + bd * 3 + 1)
+                val r3 = fastSprayRandomFloat(seed, b * 31 + bd * 3 + 2)
+                val angle = r1 * 6.2831855f
+                val rFactor = (r2 + r3) * 0.5f
+                val dotDist = rFactor * effectiveRadius * 0.85f
+                val dx = bx + kotlin.math.cos(angle) * dotDist
+                val dy = by + kotlin.math.sin(angle) * dotDist
+                val bAlpha = (scaledAlpha * 0.30f * (1f - rFactor * 0.45f)).coerceIn(0.01f, 1.0f)
                 drawCircle(
-                    color = baseColor.copy(alpha = (scaledAlpha * 0.12f * neonPulse).coerceIn(0.01f, 1.0f)),
-                    radius = effectiveRadius * 1.25f,
-                    center = Offset(cx, cy)
+                    color = baseColor.copy(alpha = bAlpha),
+                    radius = dotSizeBase * 0.95f,
+                    center = Offset(dx, dy)
                 )
             }
+        }
 
-            // Scatter aerosol droplets in circular distribution (MS Paint density distribution)
-            for (d in 0 until dotsPerStamp) {
-                val angle = random.nextFloat() * (2 * Math.PI).toFloat()
-                // Quadratic/Gaussian distance distribution: denser near the nozzle center, softer at the perimeter
-                val rFactor = (random.nextFloat() + random.nextFloat()) / 2f
-                val dist = rFactor * effectiveRadius
-                val dotX = cx + kotlin.math.cos(angle) * dist
-                val dotY = cy + kotlin.math.sin(angle) * dist
+        // 2. Active flowing aerosol particles that smoothly stream forward along the stroke order
+        val clusterSpacing = (effectiveRadius * 0.30f).coerceIn(3.5f, 14f)
+        val numClusters = (totalLength / clusterSpacing).toInt().coerceAtLeast(8)
+        val dotsPerCluster = (stroke.strokeWidth * 1.15f).toInt().coerceIn(14, 30)
+        val edgeMargin = (totalLength * 0.05f).coerceIn(6f, 40f)
 
-                val dotRadius = if (random.nextFloat() > 0.85f) dotSizeBase * 1.5f else dotSizeBase
+        for (c in 0 until numClusters) {
+            val baseFraction = c.toFloat() / numClusters
+            // Continuous forward movement in sequence along the stroke
+            val flowPos = ((baseFraction + flowPhase) % 1.0f) * totalLength
 
-                if (isFlow) {
-                    // Aerosol Flow animation: individual droplets stream and cycle their luminous intensity and scale
-                    val dotPhaseOffset = (random.nextFloat() + (i.toFloat() / pts.size.coerceAtLeast(1))) % 1f
-                    val animatedFlowPhase = (flowPhase + dotPhaseOffset) % 1f
-                    val flowBrightness = (0.35f + 0.65f * kotlin.math.sin(animatedFlowPhase * Math.PI).toFloat()).coerceIn(0.1f, 1f)
-                    val flowAlpha = (scaledAlpha * (0.35f + 0.65f * (1f - rFactor * 0.4f)) * flowBrightness).coerceIn(0.01f, 1.0f)
-                    val flowRadius = dotRadius * (0.85f + 0.4f * flowBrightness)
+            // Smooth fade at the start & end of the stroke to avoid popping
+            val edgeFade = minOf(
+                1.0f,
+                flowPos / edgeMargin,
+                (totalLength - flowPos) / edgeMargin
+            ).coerceIn(0f, 1f)
 
+            var sIdx = 0
+            while (sIdx < n - 2 && cumDist[sIdx + 1] < flowPos) sIdx++
+            val sStart = cumDist[sIdx]
+            val sEnd = cumDist[sIdx + 1]
+            val segLen = (sEnd - sStart).coerceAtLeast(0.001f)
+            val u = ((flowPos - sStart) / segLen).coerceIn(0f, 1f)
+
+            val p0 = screenPts[sIdx]
+            val p1 = screenPts[sIdx + 1]
+            val cx = p0.x + (p1.x - p0.x) * u
+            val cy = p0.y + (p1.y - p0.y) * u
+
+            val dirX = (p1.x - p0.x) / segLen
+            val dirY = (p1.y - p0.y) / segLen
+            val normX = -dirY
+            val normY = dirX
+
+            for (d in 0 until dotsPerCluster) {
+                val r1 = fastSprayRandomFloat(seed, c * 67 + d * 3)
+                val r2 = fastSprayRandomFloat(seed, c * 67 + d * 3 + 1)
+                val r3 = fastSprayRandomFloat(seed, c * 67 + d * 3 + 2)
+
+                // Bell-curve distribution across the stroke cross-section
+                val rFactor = (r1 + r2) - 1.0f
+                val perpDist = rFactor * effectiveRadius
+                val tangOffset = (r3 - 0.5f) * clusterSpacing * 0.8f
+
+                val dotX = cx + normX * perpDist + dirX * tangOffset
+                val dotY = cy + normY * perpDist + dirY * tangOffset
+
+                val isLargeDot = r3 > 0.82f
+                val dotRadius = if (isLargeDot) dotSizeBase * 1.35f else dotSizeBase * (0.85f + 0.35f * (1f - kotlin.math.abs(rFactor)))
+                val centerDensity = (1.0f - kotlin.math.abs(rFactor) * 0.40f).coerceIn(0.25f, 1.0f)
+                val flowAlpha = (scaledAlpha * 0.85f * centerDensity * edgeFade).coerceIn(0.01f, 1.0f)
+
+                drawCircle(
+                    color = baseColor.copy(alpha = flowAlpha),
+                    radius = dotRadius,
+                    center = Offset(dotX, dotY)
+                )
+
+                // Crisp highlight for central droplets
+                if (isLargeDot && kotlin.math.abs(rFactor) < 0.35f && edgeFade > 0.35f) {
                     drawCircle(
-                        color = baseColor.copy(alpha = flowAlpha),
-                        radius = flowRadius,
-                        center = Offset(dotX, dotY)
-                    )
-
-                    // Moving bright core particle on streaming droplets
-                    if (flowBrightness > 0.75f && rFactor < 0.5f) {
-                        drawCircle(
-                            color = Color.White.copy(alpha = (flowAlpha * 0.85f).coerceIn(0.01f, 1.0f)),
-                            radius = flowRadius * 0.5f,
-                            center = Offset(dotX, dotY)
-                        )
-                    }
-                } else {
-                    val dotAlpha = (scaledAlpha * (0.45f + 0.55f * (1f - rFactor * 0.5f))).coerceIn(0.01f, 1.0f)
-
-                    drawCircle(
-                        color = baseColor.copy(alpha = dotAlpha),
-                        radius = dotRadius,
-                        center = Offset(dotX, dotY)
-                    )
-
-                    // Pulsing highlight sparkle on core droplets
-                    if (isPulsing && rFactor < 0.35f && random.nextFloat() > 0.65f) {
-                        drawCircle(
-                            color = Color.White.copy(alpha = (scaledAlpha * 0.85f * neonPulse).coerceIn(0.01f, 1.0f)),
-                            radius = dotRadius * 0.8f,
-                            center = Offset(dotX, dotY)
-                        )
-                    }
-                }
-
-                // Sparkling glitter & 4-point star glints using palette-matched gradient tints (no glow)
-                if (isSparkling && random.nextFloat() > 0.70f) {
-                    val sparklePhase = (neonPulse + random.nextFloat()) % 1.0f
-                    val sparkleAlpha = (scaledAlpha * (0.45f + 0.55f * kotlin.math.sin(sparklePhase * Math.PI).toFloat())).coerceIn(0.01f, 1.0f)
-                    val starSize = dotRadius * (1.8f + 1.4f * sparklePhase)
-
-                    // Luminous palette-derived tint for the 4-point cross and stardust center
-                    val sparkleCrossColor = Color(
-                        red = (baseColor.red * 0.55f + 0.45f).coerceIn(0f, 1f),
-                        green = (baseColor.green * 0.55f + 0.45f).coerceIn(0f, 1f),
-                        blue = (baseColor.blue * 0.55f + 0.45f).coerceIn(0f, 1f),
-                        alpha = sparkleAlpha
-                    )
-                    val sparkleCoreColor = Color(
-                        red = (baseColor.red * 0.80f + 0.20f).coerceIn(0f, 1f),
-                        green = (baseColor.green * 0.80f + 0.20f).coerceIn(0f, 1f),
-                        blue = (baseColor.blue * 0.80f + 0.20f).coerceIn(0f, 1f),
-                        alpha = sparkleAlpha
-                    )
-
-                    // Draw 4-point sparkle cross matching the palette color
-                    drawLine(
-                        color = sparkleCrossColor,
-                        start = Offset(dotX - starSize, dotY),
-                        end = Offset(dotX + starSize, dotY),
-                        strokeWidth = 1.6f,
-                        cap = StrokeCap.Round
-                    )
-                    drawLine(
-                        color = sparkleCrossColor,
-                        start = Offset(dotX, dotY - starSize),
-                        end = Offset(dotX, dotY + starSize),
-                        strokeWidth = 1.6f,
-                        cap = StrokeCap.Round
-                    )
-                    drawCircle(
-                        color = sparkleCoreColor,
-                        radius = starSize * 0.45f,
+                        color = Color.White.copy(alpha = (flowAlpha * 0.70f).coerceIn(0.01f, 1.0f)),
+                        radius = dotRadius * 0.55f,
                         center = Offset(dotX, dotY)
                     )
                 }
             }
+        }
+        return
+    }
+
+    // Normal, Pulsing, and Sparkling Dense Spray Stroke
+    val pathPts = if (pts.size > 2) smoothPoints(pts) else pts
+    val screenPts = pathPts.map { Offset(it.x * canvasW, it.y * canvasH) }
+    val n = screenPts.size
+
+    if (n <= 1) {
+        val cx = pts[0].x * canvasW
+        val cy = pts[0].y * canvasH
+        drawCircle(
+            color = baseColor.copy(alpha = scaledAlpha * 0.75f),
+            radius = effectiveRadius * 0.85f,
+            center = Offset(cx, cy)
+        )
+        return
+    }
+
+    // Calculate cumulative segment distances along smoothed path
+    val cumDist = FloatArray(n)
+    cumDist[0] = 0f
+    for (i in 1 until n) {
+        val dx = screenPts[i].x - screenPts[i - 1].x
+        val dy = screenPts[i].y - screenPts[i - 1].y
+        cumDist[i] = cumDist[i - 1] + kotlin.math.hypot(dx, dy)
+    }
+    val totalLength = cumDist[n - 1]
+    if (totalLength <= 1f) return
+
+    // 1. Dense Velvet Underlying Spray Mist for full, rich body
+    val baseStepStride = (effectiveRadius * 0.40f).coerceAtLeast(5f)
+    val baseClusterCount = (totalLength / baseStepStride).toInt().coerceIn(3, 140)
+    for (b in 0..baseClusterCount) {
+        val distAlong = (b.toFloat() / baseClusterCount) * totalLength
+        var sIdx = 0
+        while (sIdx < n - 2 && cumDist[sIdx + 1] < distAlong) sIdx++
+        val sStart = cumDist[sIdx]
+        val sEnd = cumDist[sIdx + 1]
+        val segLen = (sEnd - sStart).coerceAtLeast(0.001f)
+        val u = ((distAlong - sStart) / segLen).coerceIn(0f, 1f)
+        val bx = screenPts[sIdx].x + (screenPts[sIdx + 1].x - screenPts[sIdx].x) * u
+        val by = screenPts[sIdx].y + (screenPts[sIdx + 1].y - screenPts[sIdx].y) * u
+
+        val baseDots = (stroke.strokeWidth * 0.75f).toInt().coerceIn(8, 18)
+        for (bd in 0 until baseDots) {
+            val r1 = fastSprayRandomFloat(seed, b * 41 + bd * 3)
+            val r2 = fastSprayRandomFloat(seed, b * 41 + bd * 3 + 1)
+            val r3 = fastSprayRandomFloat(seed, b * 41 + bd * 3 + 2)
+            val angle = r1 * 6.2831855f
+            val rFactor = (r2 + r3) * 0.5f
+            val dotDist = rFactor * effectiveRadius * 0.90f
+            val dx = bx + kotlin.math.cos(angle) * dotDist
+            val dy = by + kotlin.math.sin(angle) * dotDist
+            val bAlpha = (scaledAlpha * 0.35f * (1f - rFactor * 0.45f)).coerceIn(0.01f, 1.0f)
+            drawCircle(
+                color = baseColor.copy(alpha = bAlpha),
+                radius = dotSizeBase * 1.0f,
+                center = Offset(dx, dy)
+            )
+        }
+    }
+
+    // 2. High-Density Core Aerosol Droplets along the stroke
+    val clusterSpacing = (effectiveRadius * 0.28f).coerceIn(3f, 12f)
+    val numClusters = (totalLength / clusterSpacing).toInt().coerceAtLeast(6)
+    val dotsPerCluster = (stroke.strokeWidth * 1.25f).toInt().coerceIn(16, 34)
+
+    for (c in 0 until numClusters) {
+        val distAlong = (c.toFloat() / numClusters) * totalLength
+        var sIdx = 0
+        while (sIdx < n - 2 && cumDist[sIdx + 1] < distAlong) sIdx++
+        val sStart = cumDist[sIdx]
+        val sEnd = cumDist[sIdx + 1]
+        val segLen = (sEnd - sStart).coerceAtLeast(0.001f)
+        val u = ((distAlong - sStart) / segLen).coerceIn(0f, 1f)
+
+        val p0 = screenPts[sIdx]
+        val p1 = screenPts[sIdx + 1]
+        val cx = p0.x + (p1.x - p0.x) * u
+        val cy = p0.y + (p1.y - p0.y) * u
+
+        val dirX = (p1.x - p0.x) / segLen
+        val dirY = (p1.y - p0.y) / segLen
+        val normX = -dirY
+        val normY = dirX
+
+        // Breathing aura if pulsing
+        if (isPulsing && c % 3 == 0) {
+            drawCircle(
+                color = baseColor.copy(alpha = (scaledAlpha * 0.09f * neonPulse).coerceIn(0.01f, 0.4f)),
+                radius = effectiveRadius * 1.25f,
+                center = Offset(cx, cy)
+            )
+        }
+
+        for (d in 0 until dotsPerCluster) {
+            val r1 = fastSprayRandomFloat(seed, c * 73 + d * 3)
+            val r2 = fastSprayRandomFloat(seed, c * 73 + d * 3 + 1)
+            val r3 = fastSprayRandomFloat(seed, c * 73 + d * 3 + 2)
+
+            // Bell-curve distribution across cross-section
+            val rFactor = (r1 + r2) - 1.0f
+            val perpDist = rFactor * effectiveRadius
+            val tangOffset = (r3 - 0.5f) * clusterSpacing * 0.85f
+
+            val dotX = cx + normX * perpDist + dirX * tangOffset
+            val dotY = cy + normY * perpDist + dirY * tangOffset
+
+            val isLargeDot = r3 > 0.82f
+            val dotRadius = if (isLargeDot) dotSizeBase * 1.35f else dotSizeBase * (0.85f + 0.35f * (1f - kotlin.math.abs(rFactor)))
+            val centerDensity = (1.0f - kotlin.math.abs(rFactor) * 0.38f).coerceIn(0.30f, 1.0f)
+            val dotAlpha = (scaledAlpha * 0.85f * centerDensity).coerceIn(0.01f, 1.0f)
+
+            drawCircle(
+                color = baseColor.copy(alpha = dotAlpha),
+                radius = dotRadius,
+                center = Offset(dotX, dotY)
+            )
+
+            // Crisp center droplet highlights & pulsing glow
+            if (r3 > 0.80f && kotlin.math.abs(rFactor) < 0.32f) {
+                val highlightAlpha = if (isPulsing) {
+                    (dotAlpha * 0.85f * neonPulse).coerceIn(0.01f, 1.0f)
+                } else {
+                    (dotAlpha * 0.45f).coerceIn(0.01f, 1.0f)
+                }
+                drawCircle(
+                    color = Color.White.copy(alpha = highlightAlpha),
+                    radius = dotRadius * 0.55f,
+                    center = Offset(dotX, dotY)
+                )
+            }
+        }
+
+        // Sparkling glitter & 4-point star glints
+        if (isSparkling && (c % 3 == 0 || fastSprayRandomFloat(seed, c * 17 + 5) > 0.85f)) {
+            val starPhase = (neonPulse + fastSprayRandomFloat(seed, c * 19 + 7)) % 1.0f
+            val starAlpha = (scaledAlpha * (0.50f + 0.50f * kotlin.math.sin(starPhase * Math.PI.toFloat()))).coerceIn(0.01f, 1.0f)
+            val starSize = dotSizeBase * (2.2f + 1.2f * starPhase)
+
+            val sparkleCrossColor = Color(
+                red = (baseColor.red * 0.55f + 0.45f).coerceIn(0f, 1f),
+                green = (baseColor.green * 0.55f + 0.45f).coerceIn(0f, 1f),
+                blue = (baseColor.blue * 0.55f + 0.45f).coerceIn(0f, 1f),
+                alpha = starAlpha
+            )
+
+            drawLine(
+                color = sparkleCrossColor,
+                start = Offset(cx - starSize, cy),
+                end = Offset(cx + starSize, cy),
+                strokeWidth = 1.6f,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = sparkleCrossColor,
+                start = Offset(cx, cy - starSize),
+                end = Offset(cx, cy + starSize),
+                strokeWidth = 1.6f,
+                cap = StrokeCap.Round
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = (starAlpha * 0.90f).coerceIn(0.01f, 1.0f)),
+                radius = dotSizeBase * 0.95f,
+                center = Offset(cx, cy)
+            )
         }
     }
 }

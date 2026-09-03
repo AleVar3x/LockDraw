@@ -36,6 +36,12 @@ interface DrawingDao {
     @Query("DELETE FROM saved_stickers WHERE sessionCode = :code")
     suspend fun clearStickers(code: String)
 
+    @Query("UPDATE drawing_sessions SET hasUnsyncedChanges = :unsynced, lastSyncedAt = :syncedAt WHERE sessionCode = :code")
+    suspend fun updateSyncStatus(code: String, unsynced: Boolean, syncedAt: Long = System.currentTimeMillis())
+
+    @Query("SELECT * FROM drawing_sessions WHERE hasUnsyncedChanges = 1")
+    suspend fun getUnsyncedSessions(): List<DrawingSessionEntity>
+
     @Transaction
     suspend fun saveFullSessionState(
         session: DrawingSessionEntity,

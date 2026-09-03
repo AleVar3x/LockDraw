@@ -84,6 +84,13 @@ sealed class SyncAction {
     data class ClearUserLayer(
         val authorId: String
     ) : SyncAction()
+
+    data class EraseArea(
+        val x: Float,
+        val y: Float,
+        val radius: Float,
+        val authorId: String
+    ) : SyncAction()
 }
 
 object SyncActionSerializer {
@@ -243,6 +250,13 @@ object SyncActionSerializer {
             }
             is SyncAction.ClearUserLayer -> {
                 json.put("type", "CLEAR_USER_LAYER")
+                json.put("authorId", action.authorId)
+            }
+            is SyncAction.EraseArea -> {
+                json.put("type", "ERASE_AREA")
+                json.put("x", action.x.toDouble())
+                json.put("y", action.y.toDouble())
+                json.put("radius", action.radius.toDouble())
                 json.put("authorId", action.authorId)
             }
         }
@@ -439,6 +453,14 @@ object SyncActionSerializer {
                     SyncAction.ChangeWallpaper(
                         wallpaperTheme = WallpaperTheme.valueOf(json.optString("wallpaperTheme", "DEEP_PURPLE")),
                         customUri = if (json.has("customUri")) json.getString("customUri") else null
+                    )
+                }
+                "ERASE_AREA" -> {
+                    SyncAction.EraseArea(
+                        x = json.getDouble("x").toFloat(),
+                        y = json.getDouble("y").toFloat(),
+                        radius = json.getDouble("radius").toFloat(),
+                        authorId = json.optString("authorId", "partner")
                     )
                 }
                 else -> null
