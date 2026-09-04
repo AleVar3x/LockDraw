@@ -131,6 +131,10 @@ class DrawingViewModel(application: Application) : AndroidViewModel(application)
         repository.toggleMyDrawingsTransparency()
     }
 
+    fun setCanvasDimensions(width: Float, height: Float) {
+        repository.setCanvasDimensions(width, height)
+    }
+
     fun startDrawing(normalizedX: Float, normalizedY: Float, pressure: Float = 1.0f) {
         repository.startDrawing(normalizedX, normalizedY, pressure)
     }

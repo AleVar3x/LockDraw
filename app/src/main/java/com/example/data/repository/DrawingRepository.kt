@@ -137,6 +137,24 @@ class DrawingRepository private constructor(private val application: Application
     private val _eraserSize = MutableStateFlow(prefs.getFloat("eraser_size", 28f))
     val eraserSize: StateFlow<Float> = _eraserSize.asStateFlow()
 
+    // Canvas dimensions & aspect ratio for geometric accuracy in eraser and gestures
+    @Volatile
+    var canvasAspectRatio: Float = run {
+        val dm = application.resources.displayMetrics
+        if (dm.widthPixels > 0 && dm.heightPixels > 0) {
+            dm.heightPixels.toFloat() / dm.widthPixels.toFloat()
+        } else {
+            1920f / 1080f
+        }
+    }
+        private set
+
+    fun setCanvasDimensions(width: Float, height: Float) {
+        if (width > 0f && height > 0f) {
+            canvasAspectRatio = height / width
+        }
+    }
+
     private val _strokeAlpha = MutableStateFlow(1.0f)
     val strokeAlpha: StateFlow<Float> = _strokeAlpha.asStateFlow()
 
@@ -772,36 +790,19 @@ class DrawingRepository private constructor(private val application: Application
         }
     }
 
-    private fun distanceSqToSegment(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
-        val dx = bx - ax
-        val dy = by - ay
-        val lenSq = dx * dx + dy * dy
-        if (lenSq < 1e-7f) {
-            val dpx = px - ax
-            val dpy = py - ay
-            return dpx * dpx + dpy * dpy
-        }
-        val t = ((px - ax) * dx + (py - ay) * dy) / lenSq
-        val clampedT = t.coerceIn(0f, 1f)
-        val projX = ax + clampedT * dx
-        val projY = ay + clampedT * dy
-        val dpx = px - projX
-        val dpy = py - projY
-        return dpx * dpx + dpy * dpy
-    }
-
     fun applySelectiveEraser(x: Float, y: Float, eraserStrokeWidth: Float, broadcastRealtime: Boolean = true): Boolean {
         val eraserRadius = (eraserStrokeWidth / 450f).coerceIn(0.015f, 0.22f)
         var modified = false
+
+        val aspect = canvasAspectRatio
+        val cx = x
+        val cy = y * aspect
+        val rSq = eraserRadius * eraserRadius
 
         val currentStrokes = _strokes.value
         val newStrokes = mutableListOf<DrawingStroke>()
 
         for (stroke in currentStrokes) {
-            val strokeRadius = (stroke.strokeWidth / 900f).coerceIn(0.005f, 0.04f)
-            val combinedRadius = eraserRadius + strokeRadius
-            val combinedRadiusSq = combinedRadius * combinedRadius
-
             if (stroke.points.isEmpty()) {
                 modified = true
                 continue
@@ -809,9 +810,9 @@ class DrawingRepository private constructor(private val application: Application
 
             if (stroke.points.size == 1) {
                 val p = stroke.points[0]
-                val dx = p.x - x
-                val dy = p.y - y
-                if (dx * dx + dy * dy <= combinedRadiusSq) {
+                val dx = p.x - cx
+                val dy = p.y * aspect - cy
+                if (dx * dx + dy * dy <= rSq) {
                     modified = true
                 } else {
                     newStrokes.add(stroke)
@@ -821,38 +822,117 @@ class DrawingRepository private constructor(private val application: Application
 
             val retainedRuns = mutableListOf<MutableList<DrawingPoint>>()
             var currentRun = mutableListOf<DrawingPoint>()
+            var strokeModified = false
 
-            for (i in stroke.points.indices) {
-                val p = stroke.points[i]
-                val dx = p.x - x
-                val dy = p.y - y
-                val isPointInside = (dx * dx + dy * dy) <= combinedRadiusSq
+            var prevPoint = stroke.points[0]
+            val p0dx = prevPoint.x - cx
+            val p0dy = prevPoint.y * aspect - cy
+            var prevInside = (p0dx * p0dx + p0dy * p0dy) <= rSq
 
-                var segmentIntersects = false
-                if (i > 0) {
-                    val prev = stroke.points[i - 1]
-                    if (distanceSqToSegment(x, y, prev.x, prev.y, p.x, p.y) <= combinedRadiusSq) {
-                        segmentIntersects = true
+            if (!prevInside) {
+                currentRun.add(prevPoint)
+            } else {
+                strokeModified = true
+            }
+
+            for (i in 1 until stroke.points.size) {
+                val curPoint = stroke.points[i]
+                val curDx = curPoint.x - cx
+                val curDy = curPoint.y * aspect - cy
+                val curInside = (curDx * curDx + curDy * curDy) <= rSq
+
+                val ax = prevPoint.x
+                val ay = prevPoint.y * aspect
+                val bx = curPoint.x
+                val by = curPoint.y * aspect
+
+                val vx = bx - ax
+                val vy = by - ay
+                val lenSq = vx * vx + vy * vy
+
+                if (lenSq < 1e-9f) {
+                    if (curInside) {
+                        strokeModified = true
+                    } else if (currentRun.isEmpty() || currentRun.last() != curPoint) {
+                        currentRun.add(curPoint)
                     }
+                    prevPoint = curPoint
+                    prevInside = curInside
+                    continue
                 }
 
-                if (isPointInside || segmentIntersects) {
-                    modified = true
-                    if (currentRun.isNotEmpty()) {
+                val dx0 = ax - cx
+                val dy0 = ay - cy
+                val qa = lenSq
+                val qb = 2f * (dx0 * vx + dy0 * vy)
+                val qc = (dx0 * dx0 + dy0 * dy0) - rSq
+                val disc = qb * qb - 4f * qa * qc
+
+                fun interpolate(t: Float): DrawingPoint {
+                    val clampedT = t.coerceIn(0f, 1f)
+                    return DrawingPoint(
+                        x = prevPoint.x + clampedT * (curPoint.x - prevPoint.x),
+                        y = prevPoint.y + clampedT * (curPoint.y - prevPoint.y),
+                        pressure = prevPoint.pressure + clampedT * (curPoint.pressure - prevPoint.pressure),
+                        timestamp = prevPoint.timestamp
+                    )
+                }
+
+                if (!prevInside && !curInside) {
+                    // Both endpoints are outside the radial circle
+                    if (disc > 0f) {
+                        val sqrtDisc = kotlin.math.sqrt(disc.toDouble()).toFloat()
+                        val t1 = (-qb - sqrtDisc) / (2f * qa)
+                        val t2 = (-qb + sqrtDisc) / (2f * qa)
+                        if (t1 > 0.0001f && t2 < 0.9999f && t1 < t2) {
+                            strokeModified = true
+                            val entryPt = interpolate(t1)
+                            val exitPt = interpolate(t2)
+                            currentRun.add(entryPt)
+                            if (currentRun.size >= 2) {
+                                retainedRuns.add(currentRun)
+                            }
+                            currentRun = mutableListOf(exitPt, curPoint)
+                        } else {
+                            currentRun.add(curPoint)
+                        }
+                    } else {
+                        currentRun.add(curPoint)
+                    }
+                } else if (!prevInside && curInside) {
+                    // Segment enters the radial circle: keep segment up to circle perimeter
+                    strokeModified = true
+                    val sqrtDisc = kotlin.math.sqrt(disc.coerceAtLeast(0f).toDouble()).toFloat()
+                    val t = ((-qb - sqrtDisc) / (2f * qa)).coerceIn(0f, 1f)
+                    val entryPt = interpolate(t)
+                    currentRun.add(entryPt)
+                    if (currentRun.size >= 2) {
                         retainedRuns.add(currentRun)
-                        currentRun = mutableListOf()
                     }
+                    currentRun = mutableListOf()
+                } else if (prevInside && !curInside) {
+                    // Segment exits the radial circle: restart stroke at circle perimeter
+                    strokeModified = true
+                    val sqrtDisc = kotlin.math.sqrt(disc.coerceAtLeast(0f).toDouble()).toFloat()
+                    val t = ((-qb + sqrtDisc) / (2f * qa)).coerceIn(0f, 1f)
+                    val exitPt = interpolate(t)
+                    currentRun = mutableListOf(exitPt, curPoint)
                 } else {
-                    currentRun.add(p)
+                    // Both endpoints inside the radial circle: completely erased
+                    strokeModified = true
                 }
-            }
-            if (currentRun.isNotEmpty()) {
-                retainedRuns.add(currentRun)
+
+                prevPoint = curPoint
+                prevInside = curInside
             }
 
-            if (retainedRuns.isEmpty()) {
-                modified = true
-            } else if (retainedRuns.size == 1 && retainedRuns[0].size == stroke.points.size) {
+            if (currentRun.isNotEmpty()) {
+                if (currentRun.size >= 2 || stroke.points.size == 1) {
+                    retainedRuns.add(currentRun)
+                }
+            }
+
+            if (!strokeModified) {
                 newStrokes.add(stroke)
             } else {
                 modified = true
@@ -867,13 +947,12 @@ class DrawingRepository private constructor(private val application: Application
             }
         }
 
-        val stickerHitRadius = eraserRadius + 0.06f
-        val stickerHitRadiusSq = stickerHitRadius * stickerHitRadius
+        // Stickers: erase only when sticker center falls strictly within the radial circle
         val originalStickers = _placedStickers.value
         val filteredStickers = originalStickers.filterNot { st ->
-            val dx = st.x - x
-            val dy = st.y - y
-            (dx * dx + dy * dy) <= stickerHitRadiusSq
+            val dx = st.x - cx
+            val dy = (st.y * aspect) - cy
+            (dx * dx + dy * dy) <= rSq
         }
         if (filteredStickers.size != originalStickers.size) {
             modified = true

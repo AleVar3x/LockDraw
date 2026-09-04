@@ -79,6 +79,7 @@ data class BrushToolItem(
 
 // Primary clean base brush tools with custom eraser and watercolor icons
 val PRIMARY_BRUSH_TOOLS = listOf(
+    BrushToolItem(BrushType.ERASER, "Gomma", iconResId = R.drawable.ic_eraser),
     BrushToolItem(BrushType.PEN, "Penna", icon = Icons.Default.Edit),
     BrushToolItem(BrushType.WATERCOLOR, "Acquerello", iconResId = R.drawable.ic_watercolor_brush),
     BrushToolItem(BrushType.PENCIL, "Matita", icon = Icons.Default.Create),
@@ -86,8 +87,7 @@ val PRIMARY_BRUSH_TOOLS = listOf(
     BrushToolItem(BrushType.NEON, "Neon Glow", icon = Icons.Default.AutoAwesome),
     BrushToolItem(BrushType.SPRAY, "Spray", icon = Icons.Default.BlurOn, isPremium = true),
     BrushToolItem(BrushType.RAINBOW, "Arcobaleno", icon = Icons.Default.InvertColors),
-    BrushToolItem(BrushType.DOTTED, "Puntini", icon = Icons.Default.MoreHoriz),
-    BrushToolItem(BrushType.ERASER, "Gomma", iconResId = R.drawable.ic_eraser)
+    BrushToolItem(BrushType.DOTTED, "Puntini", icon = Icons.Default.MoreHoriz)
 )
 
 private fun getModifierIcon(modifier: StrokeModifier): ImageVector {

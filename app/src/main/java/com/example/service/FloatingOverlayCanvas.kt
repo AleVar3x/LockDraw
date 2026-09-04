@@ -161,6 +161,7 @@ fun FloatingOverlayCanvas(
             onUpdateStickerDelta = { id, dx, dy -> repository.moveStickerDelta(id, dx, dy) },
             onUpdateStickerTransform = { id, scale, rot -> repository.updateStickerTransform(id, scale, rot) },
             onDeleteSticker = { repository.deleteSticker(it) },
+            onCanvasSizeChanged = { w, h -> repository.setCanvasDimensions(w, h) },
             modifier = Modifier.fillMaxSize(),
             isInteractive = true
         )
