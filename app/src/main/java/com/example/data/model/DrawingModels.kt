@@ -33,8 +33,7 @@ enum class BrushType(val displayName: String, val iconRes: String, val isPremium
             DOTTED -> listOf(StrokeModifier.NONE, StrokeModifier.DOT_FLOW)
             SPRAY -> listOf(
                 StrokeModifier.NONE,
-                StrokeModifier.DOT_FLOW,
-                StrokeModifier.SPARKLING
+                StrokeModifier.DOT_FLOW
             )
             PEN -> listOf(
                 StrokeModifier.NONE,
@@ -42,8 +41,7 @@ enum class BrushType(val displayName: String, val iconRes: String, val isPremium
                 StrokeModifier.PULSING
             )
             WATERCOLOR -> listOf(
-                StrokeModifier.NONE,
-                StrokeModifier.WAVE
+                StrokeModifier.NONE
             )
             PENCIL, HIGHLIGHTER, NEON, RAINBOW -> listOf(
                 StrokeModifier.NONE,

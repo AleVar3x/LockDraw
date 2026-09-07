@@ -719,6 +719,8 @@ private sealed interface StrokeChunk {
  */
 private fun isStrokeAnimated(stroke: DrawingStroke): Boolean {
     val effectiveModifier = when {
+        stroke.brushType == BrushType.WATERCOLOR && stroke.modifier == StrokeModifier.WAVE -> StrokeModifier.NONE
+        stroke.brushType == BrushType.SPRAY && stroke.modifier == StrokeModifier.SPARKLING -> StrokeModifier.NONE
         stroke.modifier != StrokeModifier.NONE -> stroke.modifier
         stroke.brushType == BrushType.ANIMATED_WAVE -> StrokeModifier.WAVE
         stroke.brushType == BrushType.PULSING_NEON -> StrokeModifier.PULSING
@@ -858,6 +860,9 @@ private fun DrawScope.renderStroke(
 
     // Determine effective modifier & brush type
     val effectiveModifier = when {
+        // Remove wave from watercolor and sparkling from spray
+        stroke.brushType == BrushType.WATERCOLOR && stroke.modifier == StrokeModifier.WAVE -> StrokeModifier.NONE
+        stroke.brushType == BrushType.SPRAY && stroke.modifier == StrokeModifier.SPARKLING -> StrokeModifier.NONE
         stroke.modifier != StrokeModifier.NONE -> stroke.modifier
         stroke.brushType == BrushType.ANIMATED_WAVE -> StrokeModifier.WAVE
         stroke.brushType == BrushType.PULSING_NEON -> StrokeModifier.PULSING
@@ -1614,12 +1619,12 @@ private fun DrawScope.drawCalligraphicStroke(
 }
 
 /**
- * Authentic Organic Watercolor (Acquerello a Chiazze e Schizzi) renderer.
- * Accurately replicates physical watercolor mechanics inspired by real ink/watercolor splatters:
- * - Dark, intense wet-edge pigment rim (effetto coffee-ring / bordo bagnato scuro concentrato).
- * - Soft, translucent, non-uniform watery interior (interno a macchie tenui e velature traslucide).
- * - Non-linear, irregular organic contours and bleeding water lobes.
- * - Dynamic water splatters & droplets (schizzi e goccioline d'acqua periferiche ad ogni tratto).
+ * Authentic Flat Watercolor Brush Stroke renderer matching real-world flat bristle watercolor swatches.
+ * Inspired by professional watercolor brush flat-wash marks:
+ * - Broad, luminous flat ribbon stroke with translucent layering (velature acquerello).
+ * - Distinct feathery dry-brush bristle striations (setole e sfilacciature) extending outward at the start and tips.
+ * - Granular watercolor pigment bleed & mottled wash pooling (pigmento concentrato che si accumula verso il fondo/fine del tratto).
+ * - Subtle darker wet-edge pigment outlines (effetto bordo bagnato / coffee ring naturale).
  */
 private fun DrawScope.drawWatercolorStroke(
     stroke: DrawingStroke,
@@ -1633,136 +1638,53 @@ private fun DrawScope.drawWatercolorStroke(
     if (rawPts.isEmpty()) return
 
     val isRainbow = stroke.brushType == BrushType.RAINBOW && effectiveRainbowColors.size >= 2
-    val baseWidth = stroke.strokeWidth.coerceAtLeast(6f)
-    val baseRadius = baseWidth * 1.15f
+    val baseWidth = (stroke.strokeWidth * 1.35f).coerceAtLeast(14f)
+    val halfWidth = baseWidth * 0.5f
+    val strokeSeed = (stroke.id.hashCode().toLong() xor stroke.colorArgb.toLong())
 
-    // 1. Single tap / dab: Full Watercolor Splatter Stain (Macchia d'acqua con schizzi radiali)
+    // 1. Single tap / dab: A flat brush impression with bristle tips
     if (rawPts.size == 1) {
         val center = Offset(rawPts[0].x * canvasW, rawPts[0].y * canvasH)
-        val seed = ((rawPts[0].x * 31337 + rawPts[0].y * 7331).toLong() xor stroke.colorArgb.toLong())
+        val dabHeight = baseWidth * 1.35f
 
-        // (A) Soft translucent interior puddle body
-        val stainPath = Path()
-        val numLobes = 12
-        var isFirst = true
-        for (i in 0 until numLobes) {
-            val angle = (i.toFloat() / numLobes) * 2f * Math.PI.toFloat()
-            val rVar = 0.55f + 0.65f * fastSprayRandomFloat(seed, i)
-            val lobeR = baseRadius * rVar
-            val px = center.x + kotlin.math.cos(angle) * lobeR
-            val py = center.y + kotlin.math.sin(angle) * lobeR
-            if (isFirst) {
-                stainPath.moveTo(px, py)
-                isFirst = false
-            } else {
-                stainPath.lineTo(px, py)
-            }
-        }
-        stainPath.close()
-
-        // 1. Pale inner water wash
-        drawPath(
-            path = stainPath,
-            color = baseColor.copy(alpha = (scaledAlpha * 0.18f).coerceIn(0.01f, 0.45f))
+        // Soft background wash
+        drawOval(
+            color = baseColor.copy(alpha = (scaledAlpha * 0.28f).coerceIn(0.01f, 0.6f)),
+            topLeft = Offset(center.x - halfWidth, center.y - dabHeight * 0.5f),
+            size = androidx.compose.ui.geometry.Size(baseWidth, dabHeight)
         )
-
-        // 2. Soft mottled interior blotches (chiazze interne)
-        for (b in 0 until 5) {
-            val bAngle = fastSprayRandomFloat(seed, b + 50) * 2f * Math.PI.toFloat()
-            val bDist = baseRadius * 0.40f * fastSprayRandomFloat(seed, b + 60)
-            val bx = center.x + kotlin.math.cos(bAngle) * bDist
-            val by = center.y + kotlin.math.sin(bAngle) * bDist
-            val bRad = baseRadius * (0.35f + 0.35f * fastSprayRandomFloat(seed, b + 70))
-            drawCircle(
-                color = baseColor.copy(alpha = (scaledAlpha * 0.14f).coerceIn(0.01f, 0.35f)),
-                radius = bRad,
-                center = Offset(bx, by)
+        // Bristle striation marks
+        val numBristles = 9
+        for (b in 0 until numBristles) {
+            val frac = (b.toFloat() / (numBristles - 1)) - 0.5f
+            val bristleX = center.x + frac * baseWidth * 0.85f
+            val topH = (dabHeight * 0.55f) + fastSprayRandomFloat(strokeSeed, b) * (dabHeight * 0.35f)
+            val bristleAlpha = (scaledAlpha * (0.25f + 0.35f * fastSprayRandomFloat(strokeSeed, b + 10))).coerceIn(0.02f, 0.85f)
+            drawLine(
+                color = baseColor.copy(alpha = bristleAlpha),
+                start = Offset(bristleX, center.y + dabHeight * 0.4f),
+                end = Offset(bristleX, center.y - topH),
+                strokeWidth = (baseWidth / numBristles * 0.9f).coerceIn(1.8f, 5.5f),
+                cap = StrokeCap.Round
             )
         }
-
-        // 3. Intense dark wet-edge rim around the puddle perimeter (Bordo scuro concentrato)
-        drawPath(
-            path = stainPath,
-            color = baseColor.copy(alpha = (scaledAlpha * 0.85f).coerceIn(0.15f, 1.0f)),
-            style = Stroke(
-                width = (baseWidth * 0.18f).coerceIn(1.8f, 5.5f),
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
+        // Pigment sediment pooling at bottom
+        drawCircle(
+            color = baseColor.copy(alpha = (scaledAlpha * 0.45f).coerceIn(0.05f, 0.9f)),
+            radius = halfWidth * 0.5f,
+            center = Offset(center.x, center.y + dabHeight * 0.25f)
         )
-
-        // (B) Bleeding arms (ramificazioni sbavate)
-        val numArms = 4 + (fastSprayRandomFloat(seed, 99) * 3).toInt()
-        for (a in 0 until numArms) {
-            val armAngle = fastSprayRandomFloat(seed, a + 100) * 2f * Math.PI.toFloat()
-            val armLen = baseRadius * (1.1f + 0.9f * fastSprayRandomFloat(seed, a + 110))
-            val armPath = Path()
-            armPath.moveTo(center.x, center.y)
-            val midX = center.x + kotlin.math.cos(armAngle + 0.15f) * (armLen * 0.6f)
-            val midY = center.y + kotlin.math.sin(armAngle + 0.15f) * (armLen * 0.6f)
-            val endX = center.x + kotlin.math.cos(armAngle) * armLen
-            val endY = center.y + kotlin.math.sin(armAngle) * armLen
-            armPath.quadraticTo(midX, midY, endX, endY)
-
-            // Soft arm wash
-            drawPath(
-                path = armPath,
-                color = baseColor.copy(alpha = (scaledAlpha * 0.35f).coerceIn(0.05f, 0.70f)),
-                style = Stroke(width = baseWidth * 0.45f, cap = StrokeCap.Round)
-            )
-            // Dark arm edge
-            drawPath(
-                path = armPath,
-                color = baseColor.copy(alpha = (scaledAlpha * 0.80f).coerceIn(0.15f, 1.0f)),
-                style = Stroke(width = (baseWidth * 0.14f).coerceAtLeast(1.5f), cap = StrokeCap.Round)
-            )
-        }
-
-        // (C) Water Splatters / Schizzi radiali attorno alla macchia
-        val numSplatters = 18 + (fastSprayRandomFloat(seed, 200) * 16).toInt()
-        for (s in 0 until numSplatters) {
-            val sAngle = fastSprayRandomFloat(seed, s + 300) * 2f * Math.PI.toFloat()
-            // Varied distance: some close to the rim, some shot far away
-            val distMul = if (s % 4 == 0) {
-                1.8f + 2.2f * fastSprayRandomFloat(seed, s + 400) // Far splatter
-            } else {
-                1.1f + 0.9f * fastSprayRandomFloat(seed, s + 400) // Near splatter
-            }
-            val sDist = baseRadius * distMul
-            val sx = center.x + kotlin.math.cos(sAngle) * sDist
-            val sy = center.y + kotlin.math.sin(sAngle) * sDist
-
-            val sRadius = if (s % 5 == 0) {
-                (baseWidth * 0.14f + 1.8f * fastSprayRandomFloat(seed, s + 500)).coerceIn(1.8f, 5.5f) // Medium drop
-            } else {
-                (baseWidth * 0.08f + 1.2f * fastSprayRandomFloat(seed, s + 500)).coerceIn(1.0f, 3.2f) // Fine micro-droplet
-            }
-
-            // High pigment density in droplets with soft micro-aura
-            drawCircle(
-                color = baseColor.copy(alpha = (scaledAlpha * 0.90f).coerceIn(0.20f, 1.0f)),
-                radius = sRadius,
-                center = Offset(sx, sy)
-            )
-            if (sRadius > 2.5f) {
-                drawCircle(
-                    color = baseColor.copy(alpha = (scaledAlpha * 0.30f).coerceIn(0.05f, 0.60f)),
-                    radius = sRadius * 1.5f,
-                    center = Offset(sx, sy)
-                )
-            }
-        }
         return
     }
 
-    // 2. Continuous stroke with Dark Wet-Edge, Translucent Interior Wash, and Dynamic Splatters
+    // 2. Continuous stroke: Full Flat Watercolor Brush with bristle striations, dry-brush tips & wet edges
     val smoothedPts = if (rawPts.size > 2) smoothPoints(rawPts) else rawPts
     val n = smoothedPts.size
     if (n < 2) return
 
     val screenPts = smoothedPts.map { Offset(it.x * canvasW, it.y * canvasH) }
 
-    // Segment lengths and stroke geometry
+    // Segment lengths and stroke trajectory
     val segLengths = FloatArray(n - 1)
     var totalLength = 0f
     for (i in 0 until n - 1) {
@@ -1771,21 +1693,17 @@ private fun DrawScope.drawWatercolorStroke(
         totalLength += len
     }
 
-    if (totalLength <= 0.5f) {
+    if (totalLength <= 1f) {
         drawCircle(
             color = baseColor.copy(alpha = (scaledAlpha * 0.4f).coerceIn(0.01f, 1.0f)),
-            radius = baseRadius,
+            radius = halfWidth,
             center = screenPts[0]
         )
         return
     }
 
-    // Prepare left/right edge paths for dark wet-edge rim
-    val leftRimPath = Path()
-    val rightRimPath = Path()
-    val interiorWashPath = Path()
-
-    val stepSpacing = (baseRadius * 0.28f).coerceIn(2.5f, 14f)
+    // Step spacing along spine
+    val stepSpacing = (baseWidth * 0.16f).coerceIn(2.5f, 12f)
     var currentDist = 0f
     var segIdx = 0
     var distInSeg = 0f
@@ -1793,11 +1711,11 @@ private fun DrawScope.drawWatercolorStroke(
 
     val leftBoundary = ArrayList<Offset>()
     val rightBoundary = ArrayList<Offset>()
-    val centerSamples = ArrayList<Offset>()
-    val radiiSamples = ArrayList<Float>()
-    val colorSamples = ArrayList<Color>()
-
-    val strokeSeed = (stroke.id.hashCode().toLong() xor stroke.colorArgb.toLong())
+    val spinePoints = ArrayList<Offset>()
+    val normalList = ArrayList<Offset>()
+    val dirList = ArrayList<Offset>()
+    val lengthFracs = ArrayList<Float>()
+    val widthsList = ArrayList<Float>()
 
     while (currentDist <= totalLength) {
         while (segIdx < n - 2 && distInSeg > segLengths[segIdx]) {
@@ -1818,87 +1736,26 @@ private fun DrawScope.drawWatercolorStroke(
         val normX = -dirY
         val normY = dirX
 
-        // Dynamic velocity & pressure water deposit factor
+        val progress = (currentDist / totalLength).coerceIn(0f, 1f)
+
+        // Flat brush width profile: wide body, natural organic taper/flare
         val pt0 = smoothedPts[segIdx]
         val pt1 = smoothedPts[segIdx + 1]
-        val dt = (pt1.timestamp - pt0.timestamp).coerceIn(1L, 400L).toFloat()
-        val velocity = if (dt > 0f) segLen / dt else 0.5f
-        val flowFactor = (1.25f - 0.65f * (velocity / (velocity + 0.6f))).coerceIn(0.55f, 1.45f)
-        val pressure = pt0.pressure + (pt1.pressure - pt0.pressure) * segFrac
-        val pressFactor = (0.75f + 0.25f * pressure).coerceIn(0.65f, 1.35f)
+        val pressure = (pt0.pressure + (pt1.pressure - pt0.pressure) * segFrac).coerceIn(0.65f, 1.35f)
+        val sampleSeed = (strokeSeed xor (sampleIdx * 337L))
+        val organicNoise = 0.92f + 0.16f * fastSprayRandomFloat(sampleSeed, 1)
 
-        val activeRadius = baseRadius * flowFactor * pressFactor
-        val seed = ((posX * 1000f + posY * 733f + sampleIdx * 137f).toLong() xor strokeSeed)
-
-        // Rainbow color interpolation if active
-        val currentColor = if (isRainbow) {
-            val progress = (currentDist / totalLength).coerceIn(0f, 0.999f)
-            val colorIdx = (progress * (effectiveRainbowColors.size - 1)).toInt()
-            val nextIdx = (colorIdx + 1).coerceAtMost(effectiveRainbowColors.size - 1)
-            val subFrac = (progress * (effectiveRainbowColors.size - 1)) - colorIdx
-            val c1 = effectiveRainbowColors[colorIdx]
-            val c2 = effectiveRainbowColors[nextIdx]
-            Color(
-                red = c1.red + (c2.red - c1.red) * subFrac,
-                green = c1.green + (c2.green - c1.green) * subFrac,
-                blue = c1.blue + (c2.blue - c1.blue) * subFrac,
-                alpha = c1.alpha + (c2.alpha - c1.alpha) * subFrac
-            )
-        } else baseColor
-
-        // Organic non-linear undulating left & right borders (wavy puddle contours)
-        val leftUndulation = (0.75f + 0.55f * fastSprayRandomFloat(seed, 1))
-        val rightUndulation = (0.75f + 0.55f * fastSprayRandomFloat(seed, 2))
-
-        val leftOffsetDist = activeRadius * leftUndulation
-        val rightOffsetDist = activeRadius * rightUndulation
-
-        val leftPt = Offset(posX + normX * leftOffsetDist, posY + normY * leftOffsetDist)
-        val rightPt = Offset(posX - normX * rightOffsetDist, posY - normY * rightOffsetDist)
+        val curHalfW = halfWidth * pressure * organicNoise
+        val leftPt = Offset(posX + normX * curHalfW, posY + normY * curHalfW)
+        val rightPt = Offset(posX - normX * curHalfW, posY - normY * curHalfW)
 
         leftBoundary.add(leftPt)
         rightBoundary.add(rightPt)
-        centerSamples.add(Offset(posX, posY))
-        radiiSamples.add(activeRadius)
-        colorSamples.add(currentColor)
-
-        // (D) Dynamic Splatters & Droplets generated along the stroke path
-        // Spawn probability increases with speed and organic variance
-        if (fastSprayRandomFloat(seed, 10) > 0.40f) {
-            val isLeft = fastSprayRandomFloat(seed, 11) > 0.5f
-            val sideSign = if (isLeft) 1f else -1f
-            val baseSideOffset = if (isLeft) leftOffsetDist else rightOffsetDist
-
-            // Splatter distance: shoots outward from the wet edge
-            val splatterDist = baseSideOffset + activeRadius * (0.35f + 1.75f * fastSprayRandomFloat(seed, 12))
-            val splatterAngleDrift = (fastSprayRandomFloat(seed, 13) - 0.5f) * 0.65f
-            val splatterNormX = normX * kotlin.math.cos(splatterAngleDrift) - normY * kotlin.math.sin(splatterAngleDrift)
-            val splatterNormY = normX * kotlin.math.sin(splatterAngleDrift) + normY * kotlin.math.cos(splatterAngleDrift)
-
-            val spX = posX + splatterNormX * (sideSign * splatterDist)
-            val spY = posY + splatterNormY * (sideSign * splatterDist)
-
-            val spRadius = if (fastSprayRandomFloat(seed, 14) > 0.82f) {
-                (baseWidth * 0.12f + 1.8f * fastSprayRandomFloat(seed, 15)).coerceIn(1.8f, 5.0f) // Satellite drop
-            } else {
-                (baseWidth * 0.07f + 1.1f * fastSprayRandomFloat(seed, 15)).coerceIn(0.9f, 2.8f) // Micro droplet
-            }
-
-            // Dark intense splatter droplet
-            drawCircle(
-                color = currentColor.copy(alpha = (scaledAlpha * 0.88f).coerceIn(0.20f, 1.0f)),
-                radius = spRadius,
-                center = Offset(spX, spY)
-            )
-            // Delicate outer water halo for larger drops
-            if (spRadius > 2.2f) {
-                drawCircle(
-                    color = currentColor.copy(alpha = (scaledAlpha * 0.25f).coerceIn(0.04f, 0.50f)),
-                    radius = spRadius * 1.45f,
-                    center = Offset(spX, spY)
-                )
-            }
-        }
+        spinePoints.add(Offset(posX, posY))
+        normalList.add(Offset(normX, normY))
+        dirList.add(Offset(dirX, dirY))
+        lengthFracs.add(progress)
+        widthsList.add(curHalfW)
 
         currentDist += stepSpacing
         distInSeg += stepSpacing
@@ -1907,93 +1764,198 @@ private fun DrawScope.drawWatercolorStroke(
 
     if (leftBoundary.isEmpty() || rightBoundary.isEmpty()) return
 
-    // 1. Build the full non-linear watercolor puddle polygon (interior body)
-    interiorWashPath.moveTo(leftBoundary[0].x, leftBoundary[0].y)
+    // -------------------------------------------------------------------------------------
+    // LAYER 1: Soft Translucent Base Watercolor Wash (Velatura di base fluida e luminosa)
+    // -------------------------------------------------------------------------------------
+    val bodyPolygon = Path()
+    bodyPolygon.moveTo(leftBoundary[0].x, leftBoundary[0].y)
     for (i in 1 until leftBoundary.size) {
-        val prev = leftBoundary[i - 1]
-        val curr = leftBoundary[i]
-        interiorWashPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+        val p = leftBoundary[i - 1]
+        val c = leftBoundary[i]
+        bodyPolygon.quadraticTo(p.x, p.y, (p.x + c.x) * 0.5f, (p.y + c.y) * 0.5f)
     }
-    interiorWashPath.lineTo(leftBoundary.last().x, leftBoundary.last().y)
-
-    // Connect to right boundary in reverse
-    interiorWashPath.lineTo(rightBoundary.last().x, rightBoundary.last().y)
+    bodyPolygon.lineTo(leftBoundary.last().x, leftBoundary.last().y)
+    bodyPolygon.lineTo(rightBoundary.last().x, rightBoundary.last().y)
     for (i in rightBoundary.size - 2 downTo 0) {
-        val prev = rightBoundary[i + 1]
-        val curr = rightBoundary[i]
-        interiorWashPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+        val p = rightBoundary[i + 1]
+        val c = rightBoundary[i]
+        bodyPolygon.quadraticTo(p.x, p.y, (p.x + c.x) * 0.5f, (p.y + c.y) * 0.5f)
     }
-    interiorWashPath.lineTo(rightBoundary[0].x, rightBoundary[0].y)
-    interiorWashPath.close()
+    bodyPolygon.lineTo(rightBoundary[0].x, rightBoundary[0].y)
+    bodyPolygon.close()
 
-    // 2. Draw Soft Translucent Interior Water Wash (Velatura interna tenue a macchie)
+    // 1st Layer: Luminous wash
     drawPath(
-        path = interiorWashPath,
-        color = baseColor.copy(alpha = (scaledAlpha * 0.16f).coerceIn(0.01f, 0.38f))
+        path = bodyPolygon,
+        color = baseColor.copy(alpha = (scaledAlpha * 0.22f).coerceIn(0.01f, 0.45f))
+    )
+    // 2nd Layer: Slightly narrower, richer core for depth
+    drawPath(
+        path = bodyPolygon,
+        color = baseColor.copy(alpha = (scaledAlpha * 0.14f).coerceIn(0.01f, 0.35f))
     )
 
-    // 3. Draw Interior Mottled Puddles (Macchie tenui sparse verso l'interno)
-    val mottledStep = (centerSamples.size / 15).coerceIn(1, 4)
-    for (i in 0 until centerSamples.size step mottledStep) {
-        val centerPt = centerSamples[i]
-        val rad = radiiSamples[i]
-        val col = colorSamples[i]
-        val sSeed = strokeSeed xor (i * 271L)
+    // -------------------------------------------------------------------------------------
+    // LAYER 2: Flat Brush Bristle Striations & Bristle Spikes (Setole sfilacciate e striature)
+    // As seen in the reference watercolor swatches, the start or top has distinct bristle fibers
+    // -------------------------------------------------------------------------------------
+    val numRibbons = 12
+    val numSamples = spinePoints.size
+    for (r in 0 until numRibbons) {
+        val ribbonFrac = (r.toFloat() / (numRibbons - 1)) * 2f - 1f // -1f (left) to +1f (right)
+        val ribbonSeed = strokeSeed xor (r * 1013L)
+        val bristleWidth = (baseWidth / numRibbons * (0.85f + 0.4f * fastSprayRandomFloat(ribbonSeed, 1))).coerceIn(1.6f, 6.0f)
+        val bristleAlpha = (scaledAlpha * (0.16f + 0.26f * fastSprayRandomFloat(ribbonSeed, 2))).coerceIn(0.02f, 0.70f)
 
-        val puddleOffX = (fastSprayRandomFloat(sSeed, 30) - 0.5f) * rad * 0.45f
-        val puddleOffY = (fastSprayRandomFloat(sSeed, 31) - 0.5f) * rad * 0.45f
-        val puddleRad = rad * (0.45f + 0.45f * fastSprayRandomFloat(sSeed, 32))
-        val puddleAlpha = (scaledAlpha * (0.08f + 0.10f * fastSprayRandomFloat(sSeed, 33))).coerceIn(0.01f, 0.32f)
+        val bristlePath = Path()
+        var hasMoved = false
+
+        // Individual bristle length variance: some bristles extend further, some stop earlier (dry brush effect)
+        val bristleStartFrac = (fastSprayRandomFloat(ribbonSeed, 3) * 0.12f)
+        val bristleEndFrac = 1.0f - (fastSprayRandomFloat(ribbonSeed, 4) * 0.08f)
+
+        for (i in 0 until numSamples) {
+            val progress = lengthFracs[i]
+            if (progress < bristleStartFrac || progress > bristleEndFrac) continue
+
+            val center = spinePoints[i]
+            val norm = normalList[i]
+            val curW = widthsList[i]
+
+            // Micro wave jitter for individual hair wiggle
+            val hairJitter = (fastSprayRandomFloat(ribbonSeed xor (i * 37L), 5) - 0.5f) * (baseWidth * 0.08f)
+            val bx = center.x + norm.x * (ribbonFrac * curW * 0.88f + hairJitter)
+            val by = center.y + norm.y * (ribbonFrac * curW * 0.88f + hairJitter)
+
+            if (!hasMoved) {
+                bristlePath.moveTo(bx, by)
+                hasMoved = true
+            } else {
+                bristlePath.lineTo(bx, by)
+            }
+        }
+
+        if (hasMoved) {
+            drawPath(
+                path = bristlePath,
+                color = baseColor.copy(alpha = bristleAlpha),
+                style = Stroke(width = bristleWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
+    }
+
+    // -------------------------------------------------------------------------------------
+    // LAYER 3: Feathery Bristle Tips at Stroke Start (Punte delle setole sfilacciate alla partenza)
+    // Exactly matching the iconic crown of vertical bristle spikes at the top of the reference swatches
+    // -------------------------------------------------------------------------------------
+    if (numSamples >= 2) {
+        val startCenter = spinePoints[0]
+        val startNorm = normalList[0]
+        val startDir = dirList[0] // direction pointing forward
+        val startWidth = widthsList[0]
+
+        // Bristle tips point backwards against the stroke movement (or forward depending on stroke origin)
+        val tipCount = 14
+        for (t in 0 until tipCount) {
+            val tFrac = (t.toFloat() / (tipCount - 1)) * 2f - 1f // across width
+            val tipSeed = strokeSeed xor (t * 2039L)
+
+            // Feathery bristle tip length varies organically
+            val spikeLength = baseWidth * (0.35f + 0.85f * fastSprayRandomFloat(tipSeed, 11))
+            val lateralPos = tFrac * startWidth * 0.90f
+            val basePtX = startCenter.x + startNorm.x * lateralPos
+            val basePtY = startCenter.y + startNorm.y * lateralPos
+
+            // Extend outward opposite to stroke direction
+            val tipPtX = basePtX - startDir.x * spikeLength + (fastSprayRandomFloat(tipSeed, 12) - 0.5f) * (baseWidth * 0.15f)
+            val tipPtY = basePtY - startDir.y * spikeLength + (fastSprayRandomFloat(tipSeed, 13) - 0.5f) * (baseWidth * 0.15f)
+
+            val tipAlpha = (scaledAlpha * (0.28f + 0.40f * fastSprayRandomFloat(tipSeed, 14))).coerceIn(0.04f, 0.85f)
+            val tipW = (baseWidth / tipCount * (0.75f + 0.5f * fastSprayRandomFloat(tipSeed, 15))).coerceIn(1.5f, 4.8f)
+
+            drawLine(
+                color = baseColor.copy(alpha = tipAlpha),
+                start = Offset(basePtX, basePtY),
+                end = Offset(tipPtX, tipPtY),
+                strokeWidth = tipW,
+                cap = StrokeCap.Round
+            )
+        }
+    }
+
+    // -------------------------------------------------------------------------------------
+    // LAYER 4: Organic Pigment Pooling & Granulation (Concentrazione d'acqua e pigmento sul finale)
+    // Water and pigment pool heavily towards the tail and edges creating natural watercolor blooms
+    // -------------------------------------------------------------------------------------
+    val poolStartIdx = (numSamples * 0.55f).toInt().coerceIn(0, numSamples - 1)
+    for (i in poolStartIdx until numSamples step 2) {
+        val progress = lengthFracs[i]
+        val center = spinePoints[i]
+        val rad = widthsList[i]
+        val pSeed = strokeSeed xor (i * 883L)
+
+        // Concentration increases towards the end of the stroke (puddle drying effect)
+        val poolConcentration = ((progress - 0.55f) / 0.45f).coerceIn(0f, 1f)
+        val poolAlpha = (scaledAlpha * (0.15f + 0.35f * poolConcentration * fastSprayRandomFloat(pSeed, 21))).coerceIn(0.02f, 0.70f)
+        val poolRadius = rad * (0.40f + 0.50f * fastSprayRandomFloat(pSeed, 22))
+
+        val offsetX = (fastSprayRandomFloat(pSeed, 23) - 0.5f) * rad * 0.65f
+        val offsetY = (fastSprayRandomFloat(pSeed, 24) - 0.5f) * rad * 0.65f
 
         drawCircle(
-            color = col.copy(alpha = puddleAlpha),
-            radius = puddleRad,
-            center = Offset(centerPt.x + puddleOffX, centerPt.y + puddleOffY)
+            color = baseColor.copy(alpha = poolAlpha),
+            radius = poolRadius,
+            center = Offset(center.x + offsetX, center.y + offsetY)
         )
     }
 
-    // 4. Draw Intense Dark Wet-Edge Rim on Left & Right Boundaries (Bordo scuro intenso / Coffee-ring effect)
+    // -------------------------------------------------------------------------------------
+    // LAYER 5: Delicate Wet-Edge Rim (Bordo d'acqua scuro e increspato / Coffee-ring effect)
+    // Fine, organic outline where pigment collected along the outer wet meniscus
+    // -------------------------------------------------------------------------------------
+    val leftRimPath = Path()
     leftRimPath.moveTo(leftBoundary[0].x, leftBoundary[0].y)
     for (i in 1 until leftBoundary.size) {
-        val prev = leftBoundary[i - 1]
-        val curr = leftBoundary[i]
-        leftRimPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+        val p = leftBoundary[i - 1]
+        val c = leftBoundary[i]
+        leftRimPath.quadraticTo(p.x, p.y, (p.x + c.x) * 0.5f, (p.y + c.y) * 0.5f)
     }
     leftRimPath.lineTo(leftBoundary.last().x, leftBoundary.last().y)
 
+    val rightRimPath = Path()
     rightRimPath.moveTo(rightBoundary[0].x, rightBoundary[0].y)
     for (i in 1 until rightBoundary.size) {
-        val prev = rightBoundary[i - 1]
-        val curr = rightBoundary[i]
-        rightRimPath.quadraticTo(prev.x, prev.y, (prev.x + curr.x) * 0.5f, (prev.y + curr.y) * 0.5f)
+        val p = rightBoundary[i - 1]
+        val c = rightBoundary[i]
+        rightRimPath.quadraticTo(p.x, p.y, (p.x + c.x) * 0.5f, (p.y + c.y) * 0.5f)
     }
     rightRimPath.lineTo(rightBoundary.last().x, rightBoundary.last().y)
 
-    val rimStrokeWidth = (baseWidth * 0.18f).coerceIn(1.8f, 5.0f)
-    val rimAlpha = (scaledAlpha * 0.85f).coerceIn(0.18f, 1.0f)
+    val rimAlpha = (scaledAlpha * 0.65f).coerceIn(0.12f, 0.90f)
+    val rimWidth = (baseWidth * 0.08f).coerceIn(1.2f, 3.2f)
 
     drawPath(
         path = leftRimPath,
         color = baseColor.copy(alpha = rimAlpha),
-        style = Stroke(width = rimStrokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        style = Stroke(width = rimWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
     )
     drawPath(
         path = rightRimPath,
         color = baseColor.copy(alpha = rimAlpha),
-        style = Stroke(width = rimStrokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        style = Stroke(width = rimWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
     )
 
-    // Soft cap edges at start and end of stroke
-    drawCircle(
-        color = baseColor.copy(alpha = rimAlpha),
-        radius = (rimStrokeWidth * 0.9f).coerceAtLeast(2f),
-        center = leftBoundary.first()
-    )
-    drawCircle(
-        color = baseColor.copy(alpha = rimAlpha),
-        radius = (rimStrokeWidth * 0.9f).coerceAtLeast(2f),
-        center = rightBoundary.last()
-    )
+    // Soft finish at the final puddle rim
+    if (rightBoundary.isNotEmpty() && leftBoundary.isNotEmpty()) {
+        val endRimPath = Path()
+        endRimPath.moveTo(leftBoundary.last().x, leftBoundary.last().y)
+        endRimPath.lineTo(rightBoundary.last().x, rightBoundary.last().y)
+        drawPath(
+            path = endRimPath,
+            color = baseColor.copy(alpha = rimAlpha),
+            style = Stroke(width = rimWidth * 1.2f, cap = StrokeCap.Round)
+        )
+    }
 }
 
 /**
